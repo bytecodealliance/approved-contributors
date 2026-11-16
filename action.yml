@@ -1,0 +1,52 @@
+name: Approved Contributors
+description: Close open pull requests whose authors lack write access and are not on an approved contributors list.
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  allowlist-repo:
+    description: Repository (owner/name) holding the approved contributors list.
+    required: true
+  allowlist-path:
+    description: Path to the list within allowlist-repo.
+    required: true
+  allowlist-ref:
+    description: >
+      Branch, tag, or SHA of allowlist-repo to read. Defaults to its default
+      branch. Must be a branch (or empty) when vouch-team is set.
+    required: false
+    default: ""
+  allowlist-token:
+    description: >
+      Token that can read allowlist-repo. Defaults to the `token` input; needed
+      when the list is in a different private repository. When vouch-team is
+      set, it must also be able to write allowlist-repo contents and read the
+      team's organization members.
+    required: false
+    default: ""
+  vouch-team:
+    description: >
+      Team (org/team-slug) whose members can comment on a pull request with
+      "/vouch allow" to add its author to the allowlist and reopen it, or
+      "/vouch revoke" / "/vouch block" to remove its author from the
+      allowlist. Vouching is disabled when empty.
+    required: false
+    default: ""
+  message:
+    description: >
+      Comment posted on each pull request before closing it. "{author}" is
+      replaced with the PR author's login.
+    required: true
+  token:
+    description: Token used to list, comment on, and close pull requests.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  closed:
+    description: JSON array of the pull request numbers that were closed.
+
+runs:
+  using: node24
+  main: src/main.js

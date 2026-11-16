@@ -1,0 +1,32 @@
+# Copy to .github/workflows/ in the repository you want to protect.
+name: approved contributors
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  pull-requests: write
+  issues: write
+
+# Serialize sweeps so a PR isn't commented on twice.
+concurrency:
+  group: approved-contributors
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: OWNER/approved-contributors@v1
+        with:
+          allowlist-repo: my-org/governance
+          allowlist-path: approved-contributors.txt
+          # Needs contents read/write on my-org/governance and organization
+          # Members read, for vouch-team. See the README.
+          allowlist-token: ${{ secrets.APPROVED_CONTRIBUTORS_TOKEN }}
+          vouch-team: my-org/maintainers
+          message: |
+            Thanks for the PR, @{author}! This project only accepts pull
+            requests from approved contributors, so it has been closed
+            automatically. Please open an issue to discuss your change first.

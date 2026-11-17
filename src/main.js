@@ -71,21 +71,21 @@ async function hasWriteAccess(ctx, login) {
   return permission === "admin" || permission === "write";
 }
 
-async function readList(ctx) {
-  const res = await github(ctx.listToken, contentsUrl(ctx.apiUrl, ctx.listRepo, ctx.listPath, ctx.listRef));
+async function readList(ctx, path) {
+  const res = await github(ctx.permsToken, contentsUrl(ctx.apiUrl, ctx.permsRepo, path, ctx.permsRef));
   const file = await res.json();
   const text = Buffer.from(file.content, "base64").toString("utf8");
-  return { text, sha: file.sha, logins: parseList(text) };
+  return { path, text, sha: file.sha, logins: parseList(text) };
 }
 
 async function writeList(ctx, list, text, message) {
-  const res = await github(ctx.listToken, contentsUrl(ctx.apiUrl, ctx.listRepo, ctx.listPath), {
+  const res = await github(ctx.permsToken, contentsUrl(ctx.apiUrl, ctx.permsRepo, list.path), {
     method: "PUT",
     body: {
       message,
       content: Buffer.from(text).toString("base64"),
       sha: list.sha,
-      ...(ctx.listRef && { branch: ctx.listRef }),
+      ...(ctx.permsRef && { branch: ctx.permsRef }),
     },
   });
   list.text = text;
@@ -93,7 +93,6 @@ async function writeList(ctx, list, text, message) {
   list.logins = parseList(text);
 }
 
-const VOUCH_ACTIONS = { allow: "allow", revoke: "revoke", block: "revoke" };
 
 async function reopen(ctx, number) {
   console.log(`Reopening #${number}.`);
@@ -108,21 +107,23 @@ async function reopen(ctx, number) {
   }
 }
 
-// Acts on recent /vouch comments by vouch-team members. Only each PR
-// author's latest vouch counts, so re-reading the same comments every run
-// is idempotent. "allow" adds the author to the list and reopens PRs closed
-// before the vouch; "revoke"/"block" removes the author from the list.
-async function processVouches(ctx, list) {
+// Acts on recent /vouch comments by vouch-team members. Between "allow" and
+// "revoke", only each PR author's latest vouch counts, so re-reading the same
+// comments every run is idempotent. "allow" adds the author to the allowlist
+// and reopens PRs closed before the vouch; "revoke" removes them. "block"
+// adds the author to the blocklist, which overrides any allow; only a manual
+// edit of the blocklist undoes it.
+async function processVouches(ctx, allow, block) {
   const [org, slug] = parsePair(ctx.vouchTeam, "vouch-team");
   const members = await paginate(
-    ctx.listToken,
+    ctx.permsToken,
     `${ctx.apiUrl}/orgs/${org}/teams/${slug}/members?per_page=100`,
     { allow404: true },
   );
   if (!members) {
     throw new Error(
       `Cannot read team ${ctx.vouchTeam}: check that it exists and that ` +
-        "allowlist-token has organization Members: read permission",
+        "permissions-token has organization Members: read permission",
     );
   }
   const team = new Set(members.map((m) => m.login.toLowerCase()));
@@ -135,8 +136,8 @@ async function processVouches(ctx, list) {
   comments.sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) || a.id - b.id);
 
   const pulls = new Map();
-  // Lowercased author -> { last, allows }. `allows` holds the allow vouches
-  // since the author's most recent revoke.
+  // Lowercased author -> { last, allows, block }. `allows` holds the allow
+  // vouches since the author's most recent revoke; `block` is the latest block.
   const byAuthor = new Map();
   for (const c of comments) {
     const command = parseVouch(c.body ?? "");
@@ -153,9 +154,12 @@ async function processVouches(ctx, list) {
       console.log(`Ignoring ${c.html_url}: edited comments are not trusted.`);
       continue;
     }
-    const action = Object.hasOwn(VOUCH_ACTIONS, command) ? VOUCH_ACTIONS[command] : null;
-    if (!action) {
+    if (!["allow", "revoke", "block"].includes(command)) {
       console.log(`Ignoring ${c.html_url}: unknown command "/vouch ${command}".`);
+      continue;
+    }
+    if (command === "block" && !block) {
+      console.log(`Ignoring ${c.html_url}: "/vouch block" requires blocklist-path.`);
       continue;
     }
 
@@ -165,23 +169,41 @@ async function processVouches(ctx, list) {
     const pr = pulls.get(number);
     const key = pr.user.login.toLowerCase();
     const state = byAuthor.get(key) ?? { allows: [] };
-    if (action === "revoke") state.allows = [];
-    else state.allows.push({ c, pr });
-    state.last = { c, command, action, pr };
+    if (command === "block") {
+      state.block = { c, pr };
+    } else {
+      if (command === "revoke") state.allows = [];
+      else state.allows.push({ c, pr });
+      state.last = { c, command, pr };
+    }
     byAuthor.set(key, state);
   }
 
-  for (const { last, allows } of byAuthor.values()) {
-    const author = last.pr.user.login;
-    const listed = isApproved(list.logins, author);
-    if (last.action === "revoke") {
+  for (const { last, allows, block: blockVouch } of byAuthor.values()) {
+    const author = (last ?? blockVouch).pr.user.login;
+    if (blockVouch && !isApproved(block.logins, author)) {
+      console.log(`Adding ${author} to the blocklist (${blockVouch.c.html_url}).`);
+      await writeList(
+        ctx,
+        block,
+        appendLogin(block.text, author),
+        `block ${author} by ${blockVouch.c.user.login}\n\nVia: ${blockVouch.c.html_url}`,
+      );
+    }
+    if (!last) continue;
+    if (block && isApproved(block.logins, author)) {
+      console.log(`Ignoring "/vouch ${last.command}" for ${author}: they are on the blocklist.`);
+      continue;
+    }
+    const listed = isApproved(allow.logins, author);
+    if (last.command === "revoke") {
       if (!listed) continue;
       console.log(`Removing ${author} from the allowlist (${last.c.html_url}).`);
       await writeList(
         ctx,
-        list,
-        removeLogin(list.text, author),
-        `${last.command} ${author} by ${last.c.user.login}\n\nVia: ${last.c.html_url}`,
+        allow,
+        removeLogin(allow.text, author),
+        `revoke ${author} by ${last.c.user.login}\n\nVia: ${last.c.html_url}`,
       );
       continue;
     }
@@ -189,8 +211,8 @@ async function processVouches(ctx, list) {
       console.log(`Adding ${author} to the allowlist (${last.c.html_url}).`);
       await writeList(
         ctx,
-        list,
-        appendLogin(list.text, author),
+        allow,
+        appendLogin(allow.text, author),
         `allow ${author} by ${last.c.user.login}\n\nVia: ${last.c.html_url}`,
       );
     }
@@ -205,18 +227,22 @@ async function processVouches(ctx, list) {
   }
 }
 
-async function closeUnapproved(ctx, list) {
+// Write access exempts an author from both lists.
+async function closeUnapproved(ctx, allow, block) {
   const writers = new Map();
   const closed = [];
   for (const pr of await paginate(ctx.token, `${ctx.repoUrl}/pulls?state=open&per_page=100`)) {
     const author = pr.user.login;
-    if (isApproved(list.logins, author)) continue;
+    const blocked = block !== null && isApproved(block.logins, author);
+    if (!blocked && isApproved(allow.logins, author)) continue;
     if (!writers.has(author)) writers.set(author, await hasWriteAccess(ctx, author));
     if (writers.get(author)) continue;
-    console.log(`Closing #${pr.number}: ${author} is not an approved contributor.`);
+    console.log(
+      `Closing #${pr.number}: ${author} is ${blocked ? "blocked" : "not an approved contributor"}.`,
+    );
     await github(ctx.token, `${ctx.repoUrl}/issues/${pr.number}/comments`, {
       method: "POST",
-      body: { body: renderMessage(ctx.message, author) },
+      body: { body: renderMessage(blocked ? ctx.blockedMessage : ctx.message, author) },
     });
     await github(ctx.token, `${ctx.repoUrl}/pulls/${pr.number}`, {
       method: "PATCH",
@@ -237,22 +263,26 @@ async function run() {
     repoUrl: `${apiUrl}/repos/${process.env.GITHUB_REPOSITORY}`,
     token,
     message: input("message", { required: true }),
-    listRepo: input("allowlist-repo", { required: true }),
-    listPath: input("allowlist-path", { required: true }),
-    listRef: input("allowlist-ref"),
-    listToken: input("allowlist-token") || token,
+    permsRepo: input("permissions-repo", { required: true }),
+    permsRef: input("permissions-ref"),
+    permsToken: input("permissions-token") || token,
+    allowPath: input("allowlist-path", { required: true }),
+    blockPath: input("blocklist-path"),
     vouchTeam: input("vouch-team"),
   };
-  parsePair(ctx.listRepo, "allowlist-repo");
+  if (ctx.blockPath) ctx.blockedMessage = input("blocked-message", { required: true });
+  parsePair(ctx.permsRepo, "permissions-repo");
 
-  const list = await readList(ctx);
-  if (list.logins.size === 0) {
+  const allow = await readList(ctx, ctx.allowPath);
+  if (allow.logins.size === 0) {
     // Almost certainly a misconfiguration; refuse to close every PR.
-    throw new Error(`Approved contributors list ${ctx.listRepo}:${ctx.listPath} is empty`);
+    throw new Error(`Approved contributors list ${ctx.permsRepo}:${ctx.allowPath} is empty`);
   }
-  if (ctx.vouchTeam) await processVouches(ctx, list);
+  // Unlike the allowlist, an empty blocklist is normal, but it must exist.
+  const block = ctx.blockPath ? await readList(ctx, ctx.blockPath) : null;
+  if (ctx.vouchTeam) await processVouches(ctx, allow, block);
 
-  const closed = await closeUnapproved(ctx, list);
+  const closed = await closeUnapproved(ctx, allow, block);
   console.log(closed.length ? `Closed ${closed.length} pull request(s).` : "Nothing to close.");
   setOutput("closed", JSON.stringify(closed));
 }

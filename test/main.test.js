@@ -11,7 +11,8 @@ const json = { "Content-Type": "application/json" };
 const b64 = (s) => Buffer.from(s).toString("base64");
 
 // Runs main.js against a mock GitHub API. Returns the requests it made, plus
-// the list text as last written.
+// the list texts as last written.
+//   block:       blocklist text (undefined: blocklist-path unset)
 //   pages:       pages of open PRs, each page a list of author logins
 //   permissions: login -> repo permission (absent: 404)
 //   team:        vouch-team member logins (null: team endpoint 404s)
@@ -21,7 +22,10 @@ async function runAction({
   pages = [[]],
   list,
   listStatus = 200,
-  allowlistToken = "list-tok",
+  block,
+  blockStatus = 200,
+  blockedMessage = "Blocked @{author}",
+  permissionsToken = "list-tok",
   permissions = {},
   vouchTeam = "",
   team = [],
@@ -31,8 +35,10 @@ async function runAction({
   const requests = [];
   let n = 0;
   const pageData = pages.map((p) => p.map((login) => ({ number: ++n, user: { login } })));
-  let listText = list;
-  let listSha = "sha0";
+  const files = {
+    "approved.txt": { text: list, sha: "sha0", status: listStatus },
+    "blocked.txt": { text: block, sha: "sha0", status: blockStatus },
+  };
 
   const server = createServer((req, res) => {
     let body = "";
@@ -42,16 +48,17 @@ async function runAction({
       const base = `http://127.0.0.1:${server.address().port}`;
       const url = new URL(req.url, base);
       const path = url.pathname;
-      if (path === "/repos/org/gov/contents/approved.txt") {
+      const file = files[/^\/repos\/org\/gov\/contents\/(.*)$/.exec(path)?.[1]];
+      if (file) {
         if (req.method === "PUT") {
           const put = JSON.parse(body);
-          if (put.sha !== listSha) return res.writeHead(409).end("{}");
-          listText = Buffer.from(put.content, "base64").toString();
-          listSha = `sha${Number(listSha.slice(3)) + 1}`;
-          return res.writeHead(200, json).end(JSON.stringify({ content: { sha: listSha } }));
+          if (put.sha !== file.sha) return res.writeHead(409).end("{}");
+          file.text = Buffer.from(put.content, "base64").toString();
+          file.sha = `sha${Number(file.sha.slice(3)) + 1}`;
+          return res.writeHead(200, json).end(JSON.stringify({ content: { sha: file.sha } }));
         }
-        if (listStatus !== 200) return res.writeHead(listStatus).end("{}");
-        return res.writeHead(200, json).end(JSON.stringify({ content: b64(listText), sha: listSha }));
+        if (file.status !== 200) return res.writeHead(file.status).end("{}");
+        return res.writeHead(200, json).end(JSON.stringify({ content: b64(file.text), sha: file.sha }));
       }
       if (req.method === "GET" && path === "/repos/org/proj/pulls") {
         const page = Number(url.searchParams.get("page") ?? 1);
@@ -91,12 +98,14 @@ async function runAction({
     GITHUB_API_URL: `http://127.0.0.1:${server.address().port}`,
     GITHUB_REPOSITORY: "org/proj",
     GITHUB_OUTPUT: outputPath,
-    "INPUT_ALLOWLIST-REPO": "org/gov",
+    "INPUT_PERMISSIONS-REPO": "org/gov",
+    "INPUT_PERMISSIONS-REF": "",
+    "INPUT_PERMISSIONS-TOKEN": permissionsToken ?? "",
     "INPUT_ALLOWLIST-PATH": "approved.txt",
-    "INPUT_ALLOWLIST-REF": "",
-    "INPUT_ALLOWLIST-TOKEN": allowlistToken ?? "",
+    "INPUT_BLOCKLIST-PATH": block === undefined ? "" : "blocked.txt",
     "INPUT_VOUCH-TEAM": vouchTeam,
     INPUT_MESSAGE: "Sorry @{author}",
+    "INPUT_BLOCKED-MESSAGE": blockedMessage,
     INPUT_TOKEN: "pr-tok",
   };
   const code = await new Promise((resolve) => {
@@ -106,7 +115,14 @@ async function runAction({
   const writes = requests
     .filter((r) => r.method !== "GET")
     .map((r) => [r.method, r.url, r.auth, JSON.parse(r.body)]);
-  return { code, requests, writes, listText, output: readFileSync(outputPath, "utf8") };
+  return {
+    code,
+    requests,
+    writes,
+    listText: files["approved.txt"].text,
+    blockText: files["blocked.txt"].text,
+    output: readFileSync(outputPath, "utf8"),
+  };
 }
 
 test("closes only unapproved authors, across pages", async () => {
@@ -155,8 +171,8 @@ test("all approved: nothing closed", async () => {
   assert.equal(output, "closed=[]\n");
 });
 
-test("allowlist token defaults to token input", async () => {
-  const { requests } = await runAction({ list: "alice\n", allowlistToken: null });
+test("permissions token defaults to token input", async () => {
+  const { requests } = await runAction({ list: "alice\n", permissionsToken: null });
   assert.equal(requests[0].auth, "Bearer pr-tok");
 });
 
@@ -287,25 +303,24 @@ const at = (minute) => `2026-11-16T10:${String(minute).padStart(2, "0")}:00Z`;
 const timed = (id, login, body, minute, number = 7) =>
   comment(id, login, body, number, { created_at: at(minute), updated_at: at(minute) });
 
-for (const command of ["revoke", "block"]) {
-  test(`/vouch ${command}: removes the author and the sweep closes their PR`, async () => {
-    const { writes, listText, output } = await runAction({
-      pages: [["newbie"]],
-      list: "alice\nnewbie  # was vouched\n",
-      vouchTeam: "org/maintainers",
-      team: ["maint"],
-      comments: [comment(1, "maint", `/vouch ${command}`)],
-      pulls: { 7: { ...closedPr, number: 1, state: "open", closed_at: null } },
-    });
-    assert.equal(listText, "alice\n");
-    assert.deepEqual(writes[0].slice(0, 3), ["PUT", "/repos/org/gov/contents/approved.txt", "Bearer list-tok"]);
-    assert.equal(
-      writes[0][3].message,
-      `${command} newbie by maint\n\nVia: https://github.com/org/proj/pull/7#issuecomment-1`,
-    );
-    assert.equal(output, "closed=[1]\n");
+test("/vouch revoke: removes the author and the sweep closes their PR", async () => {
+  const { writes, listText, output } = await runAction({
+    pages: [["newbie"]],
+    list: "alice\nnewbie  # was vouched\n",
+    vouchTeam: "org/maintainers",
+    team: ["maint"],
+    comments: [comment(1, "maint", "/vouch revoke")],
+    pulls: { 7: { ...closedPr, number: 1, state: "open", closed_at: null } },
   });
-}
+  assert.equal(listText, "alice\n");
+  assert.deepEqual(writes[0].slice(0, 3), ["PUT", "/repos/org/gov/contents/approved.txt", "Bearer list-tok"]);
+  assert.equal(
+    writes[0][3].message,
+    "revoke newbie by maint\n\nVia: https://github.com/org/proj/pull/7#issuecomment-1",
+  );
+  assert.deepEqual(writes[1][3], { body: "Sorry @newbie" });
+  assert.equal(output, "closed=[1]\n");
+});
 
 test("/vouch revoke for an unlisted author: no commit", async () => {
   const { writes } = await runAction({
@@ -335,10 +350,10 @@ test("latest vouch wins: revoke then allow (on another PR) re-adds", async () =>
     list: "alice\nnewbie\n",
     vouchTeam: "org/maintainers",
     team: ["maint"],
-    comments: [timed(1, "maint", "/vouch block", 5, 7), timed(2, "maint", "/vouch allow", 6, 8)],
+    comments: [timed(1, "maint", "/vouch revoke", 5, 7), timed(2, "maint", "/vouch allow", 6, 8)],
     pulls: { 7: closedPr, 8: { ...closedPr, number: 8 } },
   });
-  // Already listed, so no commit; only PR 8, vouched for after the block, reopens.
+  // Already listed, so no commit; only PR 8, vouched for after the revoke, reopens.
   assert.equal(listText, "alice\nnewbie\n");
   assert.deepEqual(writes.map(([m, u]) => [m, u]), [["PATCH", "/repos/org/proj/pulls/8"]]);
 });
@@ -373,4 +388,129 @@ test("unreadable vouch team: fails without closing", async () => {
 test("no vouch-team: comments are not read", async () => {
   const { requests } = await runAction({ list: "alice\n" });
   assert.ok(!requests.some((r) => r.url.includes("/comments") || r.url.includes("/teams/")));
+});
+
+test("blocklist: closes blocked authors with blocked-message, even if allowed", async () => {
+  const { code, writes, output } = await runAction({
+    pages: [["alice", "Mallory", "eve"]],
+    list: "alice\nmallory\n",
+    block: "# spam\nmallory\n",
+  });
+  assert.equal(code, 0);
+  assert.deepEqual(writes, [
+    ["POST", "/repos/org/proj/issues/2/comments", "Bearer pr-tok", { body: "Blocked @Mallory" }],
+    ["PATCH", "/repos/org/proj/pulls/2", "Bearer pr-tok", { state: "closed" }],
+    ["POST", "/repos/org/proj/issues/3/comments", "Bearer pr-tok", { body: "Sorry @eve" }],
+    ["PATCH", "/repos/org/proj/pulls/3", "Bearer pr-tok", { state: "closed" }],
+  ]);
+  assert.equal(output, "closed=[2,3]\n");
+});
+
+test("blocklist: authors with write access are never closed", async () => {
+  const { writes } = await runAction({
+    pages: [["writer"]],
+    list: "alice\n",
+    block: "writer\n",
+    permissions: { writer: "write" },
+  });
+  assert.deepEqual(writes, []);
+});
+
+test("blocklist: empty is fine", async () => {
+  const { code, writes } = await runAction({ pages: [["alice"]], list: "alice\n", block: "" });
+  assert.equal(code, 0);
+  assert.deepEqual(writes, []);
+});
+
+test("blocklist fetch failure: fails without closing", async () => {
+  const { code, writes } = await runAction({
+    pages: [["mallory"]],
+    list: "alice\n",
+    block: "",
+    blockStatus: 404,
+  });
+  assert.equal(code, 1);
+  assert.deepEqual(writes, []);
+});
+
+test("blocklist-path without blocked-message: fails without closing", async () => {
+  const { code, requests } = await runAction({
+    pages: [["mallory"]],
+    list: "alice\n",
+    block: "",
+    blockedMessage: "",
+  });
+  assert.equal(code, 1);
+  assert.equal(requests.length, 0);
+});
+
+test("/vouch block: adds to the blocklist, leaves the allowlist, closes the PR", async () => {
+  const { writes, listText, blockText, output } = await runAction({
+    pages: [["newbie"]],
+    list: "alice\nnewbie\n",
+    block: "spammer\n",
+    vouchTeam: "org/maintainers",
+    team: ["maint"],
+    comments: [comment(1, "maint", "/vouch block")],
+    pulls: { 7: { ...closedPr, number: 1, state: "open", closed_at: null } },
+  });
+  assert.equal(listText, "alice\nnewbie\n");
+  assert.equal(blockText, "spammer\nnewbie\n");
+  assert.deepEqual(writes[0].slice(0, 3), ["PUT", "/repos/org/gov/contents/blocked.txt", "Bearer list-tok"]);
+  assert.equal(
+    writes[0][3].message,
+    "block newbie by maint\n\nVia: https://github.com/org/proj/pull/7#issuecomment-1",
+  );
+  assert.deepEqual(writes[1][3], { body: "Blocked @newbie" });
+  assert.equal(output, "closed=[1]\n");
+});
+
+test("/vouch block for an already-blocked author: no commit", async () => {
+  const { writes } = await runAction({
+    list: "alice\n",
+    block: "newbie\n",
+    vouchTeam: "org/maintainers",
+    team: ["maint"],
+    comments: [comment(1, "maint", "/vouch block")],
+    pulls: { 7: closedPr },
+  });
+  assert.deepEqual(writes, []);
+});
+
+test("/vouch block without blocklist-path is ignored", async () => {
+  const { writes, listText } = await runAction({
+    list: "alice\nnewbie\n",
+    vouchTeam: "org/maintainers",
+    team: ["maint"],
+    comments: [comment(1, "maint", "/vouch block")],
+    pulls: { 7: closedPr },
+  });
+  assert.equal(listText, "alice\nnewbie\n");
+  assert.deepEqual(writes, []);
+});
+
+test("blocked authors: later allow is ignored and the PR is not reopened", async () => {
+  const { writes, listText, blockText } = await runAction({
+    list: "alice\n",
+    block: "",
+    vouchTeam: "org/maintainers",
+    team: ["maint"],
+    comments: [timed(1, "maint", "/vouch block", 5), timed(2, "maint", "/vouch allow", 6)],
+    pulls: { 7: closedPr },
+  });
+  assert.equal(blockText, "newbie\n");
+  assert.equal(listText, "alice\n");
+  assert.deepEqual(writes.map(([m, u]) => [m, u]), [["PUT", "/repos/org/gov/contents/blocked.txt"]]);
+});
+
+test("manually blocked authors: allow is ignored", async () => {
+  const { writes } = await runAction({
+    list: "alice\n",
+    block: "newbie\n",
+    vouchTeam: "org/maintainers",
+    team: ["maint"],
+    comments: [comment(1, "maint", "/vouch allow")],
+    pulls: { 7: closedPr },
+  });
+  assert.deepEqual(writes, []);
 });

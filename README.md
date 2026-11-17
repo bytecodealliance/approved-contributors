@@ -14,6 +14,11 @@ repository. Write access is checked with the
 which reflects grants from teams and organization base permissions, so
 maintainers never need to be listed.
 
+An optional blocklist, in the same repository as the allowlist, names
+accounts that are unwelcome to contribute. Their PRs are closed with a
+separate `blocked-message`, even if they are also on the allowlist. Authors
+with write access are exempt from the blocklist too.
+
 It ignores the triggering event's payload and never checks out code, so
 nothing a PR author controls can influence it. It runs on a `schedule`
 (every 5 minutes, the shortest interval GitHub allows) rather than on pull
@@ -28,15 +33,22 @@ on demand.
 
 ## Vouching
 
-When `vouch-team` is set, members of that team can manage the allowlist by
+When `vouch-team` is set, members of that team can manage the lists by
 commenting on a pull request:
 
 | Comment                                 | Effect |
 |-----------------------------------------|--------|
 | `/vouch allow`                          | Add the PR author to the allowlist, and reopen the PR if it was closed before the comment. |
-| `/vouch revoke` or `/vouch block`       | Remove the PR author from the allowlist. The next sweep closes their open PRs. |
+| `/vouch revoke`                         | Remove the PR author from the allowlist. The next sweep closes their open PRs. |
+| `/vouch block`                          | Add the PR author to the blocklist (requires `blocklist-path`). The next sweep closes their open PRs with `blocked-message`. |
 
-Each change is committed to the allowlist with the title
+Revoking means the author needs a new vouch; blocking is a stronger judgment
+that the account is unwelcome. There is no command to unblock: maintainers
+remove the login from the blocklist by editing it in `permissions-repo`.
+While an author is blocked, `/vouch allow` and `/vouch revoke` for them are
+ignored.
+
+Each change is committed to the list with the title
 `<command> <author> by <maintainer>` (e.g. `allow octocat by alice`) and the
 body `Via: <comment link>`. Maintainers will usually be vouching on PRs the
 action already closed; that's expected.
@@ -49,16 +61,17 @@ action already closed; that's expected.
   vouch for each author counts, across all of their PRs. Re-processing is
   idempotent: no commit is made if the list already agrees, and a PR closed
   after its `/vouch allow` is not reopened.
-- Hand-editing the list to contradict a vouch from the last 24 hours will be
-  undone by the next run; post a new vouch instead.
+- Hand-editing the allowlist to contradict a vouch from the last 24 hours will be
+  undone by the next run; post a new vouch instead. Likewise, unblocking
+  someone within 24 hours of a `/vouch block` will be undone; wait a day.
 
-The commit is made through the contents API to `allowlist-ref` (or the
+The commit is made through the contents API to `permissions-ref` (or the
 default branch), so that branch must not require pull requests or status
 checks for the token's identity.
 
 ## List format
 
-One GitHub login per line. Blank lines and `#` comments are ignored, a leading
+Both lists use the same format: one GitHub login per line. Blank lines and `#` comments are ignored, a leading
 `@` is optional, and matching is case-insensitive. Include bot accounts such
 as `dependabot[bot]` if they should be allowed.
 
@@ -74,20 +87,23 @@ dependabot[bot]
 Copy [`examples/approved-contributors.yml`](examples/approved-contributors.yml)
 into `.github/workflows/`.
 
-| Input             | Required | Description |
-|-------------------|----------|-------------|
-| `allowlist-repo`  | yes      | `owner/name` of the repository holding the list. |
-| `allowlist-path`  | yes      | Path to the list within that repository. |
-| `allowlist-ref`   | no       | Branch, tag, or SHA to read. Defaults to the default branch. |
-| `allowlist-token` | no       | Token for `allowlist-repo` and `vouch-team`. Defaults to `token`. |
-| `vouch-team`      | no       | `org/team-slug` whose members can `/vouch allow`. Vouching is off when empty. |
-| `message`         | yes      | Comment posted before closing. `{author}` is replaced with the PR author's login. |
-| `token`           | no       | Token used to list, comment on, and close PRs. Defaults to `github.token`. |
+| Input               | Required | Description |
+|---------------------|----------|-------------|
+| `permissions-repo`  | yes      | `owner/name` of the repository holding the lists. |
+| `permissions-ref`   | no       | Branch, tag, or SHA to read. Defaults to the default branch. |
+| `permissions-token` | no       | Token for `permissions-repo` and `vouch-team`. Defaults to `token`. |
+| `allowlist-path`    | yes      | Path to the allowlist within `permissions-repo`. |
+| `blocklist-path`    | no       | Path to the blocklist within `permissions-repo`. The blocklist is off when empty. |
+| `vouch-team`        | no       | `org/team-slug` whose members can `/vouch`. Vouching is off when empty. |
+| `message`           | yes      | Comment posted before closing. `{author}` is replaced with the PR author's login. |
+| `blocked-message`   | if `blocklist-path` | Comment posted before closing a blocked author's PR. `{author}` is substituted as in `message`. |
+| `token`             | no       | Token used to list, comment on, and close PRs. Defaults to `github.token`. |
 
 Output `closed` is a JSON array of the PR numbers closed by this run.
 
-If the list cannot be fetched or is empty, the action fails rather than
-closing anything.
+If the allowlist cannot be fetched or is empty, or `blocklist-path` is set
+but cannot be fetched, the action fails rather than closing anything. An
+empty blocklist is fine.
 
 ### Tokens
 
@@ -101,12 +117,12 @@ The workflow needs:
 
 `github.token` can only read the current repository and can never read
 organization teams. Pass a GitHub App installation token or a fine-grained
-personal access token (owned by the organization) as `allowlist-token` when:
+personal access token (owned by the organization) as `permissions-token` when:
 
-- the list is in a different private repository: repository `Contents: read`
-  on `allowlist-repo`;
+- the lists are in a different private repository: repository
+  `Contents: read` on `permissions-repo`;
 - `vouch-team` is set: repository `Contents: read and write` on
-  `allowlist-repo`, and organization `Members: read`.
+  `permissions-repo`, and organization `Members: read`.
 
 ## Development
 

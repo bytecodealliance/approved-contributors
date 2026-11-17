@@ -5,32 +5,41 @@ branding:
   color: blue
 
 inputs:
-  allowlist-repo:
-    description: Repository (owner/name) holding the approved contributors list.
+  permissions-repo:
+    description: Repository (owner/name) holding the allowlist and blocklist.
     required: true
-  allowlist-path:
-    description: Path to the list within allowlist-repo.
-    required: true
-  allowlist-ref:
+  permissions-ref:
     description: >
-      Branch, tag, or SHA of allowlist-repo to read. Defaults to its default
+      Branch, tag, or SHA of permissions-repo to read. Defaults to its default
       branch. Must be a branch (or empty) when vouch-team is set.
     required: false
     default: ""
-  allowlist-token:
+  permissions-token:
     description: >
-      Token that can read allowlist-repo. Defaults to the `token` input; needed
-      when the list is in a different private repository. When vouch-team is
-      set, it must also be able to write allowlist-repo contents and read the
-      team's organization members.
+      Token that can read permissions-repo. Defaults to the `token` input;
+      needed when the lists are in a different private repository. When
+      vouch-team is set, it must also be able to write permissions-repo
+      contents and read the team's organization members.
+    required: false
+    default: ""
+  allowlist-path:
+    description: Path to the approved contributors list within permissions-repo.
+    required: true
+  blocklist-path:
+    description: >
+      Path to a list of blocked accounts within permissions-repo. Pull
+      requests from blocked authors are closed with blocked-message even if
+      they are on the allowlist. Authors with write access are never closed.
+      The blocklist is disabled when empty.
     required: false
     default: ""
   vouch-team:
     description: >
       Team (org/team-slug) whose members can comment on a pull request with
-      "/vouch allow" to add its author to the allowlist and reopen it, or
-      "/vouch revoke" / "/vouch block" to remove its author from the
-      allowlist. Vouching is disabled when empty.
+      "/vouch allow" to add its author to the allowlist and reopen it,
+      "/vouch revoke" to remove its author from the allowlist, or
+      "/vouch block" to add its author to the blocklist (requires
+      blocklist-path). Vouching is disabled when empty.
     required: false
     default: ""
   message:
@@ -38,6 +47,13 @@ inputs:
       Comment posted on each pull request before closing it. "{author}" is
       replaced with the PR author's login.
     required: true
+  blocked-message:
+    description: >
+      Comment posted on each pull request from a blocked author before
+      closing it. "{author}" is replaced with the PR author's login. Required
+      when blocklist-path is set.
+    required: false
+    default: ""
   token:
     description: >
       Token used to list, comment on, and close pull requests, and to read

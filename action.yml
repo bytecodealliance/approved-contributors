@@ -39,7 +39,10 @@ inputs:
       replaced with the PR author's login.
     required: true
   token:
-    description: Token used to list, comment on, and close pull requests.
+    description: >
+      Token used to list, comment on, and close pull requests, and to read
+      collaborator permissions. Needs contents, pull-requests, and issues
+      write access.
     required: false
     default: ${{ github.token }}
 

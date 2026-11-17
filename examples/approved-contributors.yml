@@ -6,6 +6,8 @@ on:
   workflow_dispatch:
 
 permissions:
+  # GitHub only shows collaborator permissions to tokens with push access.
+  contents: write
   pull-requests: write
   issues: write
 

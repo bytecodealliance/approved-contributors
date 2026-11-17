@@ -91,8 +91,13 @@ closing anything.
 
 ### Tokens
 
-The workflow needs `pull-requests: write` and `issues: write` (the closing
-comment goes through the issues API).
+The workflow needs:
+
+- `contents: write`: GitHub only lets tokens with push access read
+  collaborator permissions, which the action uses to let authors with write
+  access through. The action never pushes to this repository.
+- `pull-requests: write` and `issues: write`: to close PRs and post the
+  closing comment (which goes through the issues API).
 
 `github.token` can only read the current repository and can never read
 organization teams. Pass a GitHub App installation token or a fine-grained

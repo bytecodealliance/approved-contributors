@@ -36,7 +36,9 @@ test("parsePair", () => {
 test("parseVouch", () => {
   assert.equal(parseVouch("/vouch allow"), "allow");
   assert.equal(parseVouch("  /vouch   allow  them\nthanks"), "allow");
-  assert.equal(parseVouch("/vouch"), "");
+  assert.equal(parseVouch("/vouch"), "allow");
+  assert.equal(parseVouch("/vouch\nthanks for the PR!"), "allow");
+  assert.equal(parseVouch(" /vouch  \r\nrevoke"), "allow");
   assert.equal(parseVouch("/vouch deny"), "deny");
   assert.equal(parseVouch("/vouchallow"), null);
   assert.equal(parseVouch("please /vouch allow"), null);

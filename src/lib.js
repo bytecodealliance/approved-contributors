@@ -31,10 +31,10 @@ export function removeLogin(text, login) {
     .join("");
 }
 
-// Returns the subcommand of a comment starting with `/vouch` ("" if none),
-// or null for any other comment.
+// Returns the subcommand of a comment whose first line starts with `/vouch`,
+// or null for any other comment. A bare `/vouch` means "allow".
 export function parseVouch(body) {
-  const [command, sub = ""] = body.trim().split(/\s+/);
+  const [command, sub = "allow"] = body.trim().split(/\r?\n/)[0].trim().split(/\s+/);
   return command === "/vouch" ? sub : null;
 }
 

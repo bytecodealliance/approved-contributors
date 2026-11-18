@@ -36,7 +36,8 @@ inputs:
   vouch-team:
     description: >
       Team (org/team-slug) whose members can comment on a pull request with
-      "/vouch allow" to add its author to the allowlist and reopen it,
+      "/vouch allow" (or just "/vouch") to add its author to the allowlist
+      and reopen it,
       "/vouch revoke" to remove its author from the allowlist, or
       "/vouch block" to add its author to the blocklist (requires
       blocklist-path). Vouching is disabled when empty.

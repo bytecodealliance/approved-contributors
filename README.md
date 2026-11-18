@@ -1,16 +1,17 @@
 # approved-contributors
 
-A GitHub Action that closes open pull requests whose authors are not on an
-approved contributors list. The list is a text file stored in a GitHub
-repository.
+A GitHub Action that permits only pull requests from contributors on an allowlist.
+Closes unapproved pull requests with a configurable message, and supports a
+small set of /vouch commands from maintainers to manage the allowlist.
 
 ## How it works
 
-Each run sweeps the repository: it fetches the list, enumerates all open pull
-requests through the API, and comments on and closes every one whose author
-is neither on the list nor has write (or admin, or maintain) access to the
-repository. Write access is checked with the
-[collaborator permission API](https://docs.github.com/en/rest/collaborators/collaborators#get-repository-permissions-for-a-user),
+Each run sweeps the repository: it fetches the allowlist and blocklist,
+enumerates all open pull requests through the API, and comments on and closes
+every one whose author is neither on the list nor has write (or admin, or
+maintain) access to the repository. Write access is checked with the
+[collaborator permission
+API](https://docs.github.com/en/rest/collaborators/collaborators#get-repository-permissions-for-a-user),
 which reflects grants from teams and organization base permissions, so
 maintainers never need to be listed.
 
@@ -38,14 +39,15 @@ commenting on a pull request:
 
 | Comment                                 | Effect |
 |-----------------------------------------|--------|
-| `/vouch allow`                          | Add the PR author to the allowlist, and reopen the PR if it was closed before the comment. |
+| `/vouch allow` or just `/vouch`         | Add the PR author to the allowlist, and reopen the PR if it was closed before the comment. |
 | `/vouch revoke`                         | Remove the PR author from the allowlist. The next sweep closes their open PRs. |
 | `/vouch block`                          | Add the PR author to the blocklist (requires `blocklist-path`). The next sweep closes their open PRs with `blocked-message`. |
 
 Revoking means the author needs a new vouch; blocking is a stronger judgment
 that the account is unwelcome. There is no command to unblock: maintainers
 remove the login from the blocklist by editing it in `permissions-repo`.
-While an author is blocked, `/vouch allow` and `/vouch revoke` for them are
+Only the first line of a comment is read as the command, so the rest can
+explain the decision. While an author is blocked, `/vouch allow` and `/vouch revoke` for them are
 ignored.
 
 Each change is committed to the list with the title
@@ -123,6 +125,19 @@ personal access token (owned by the organization) as `permissions-token` when:
   `Contents: read` on `permissions-repo`;
 - `vouch-team` is set: repository `Contents: read and write` on
   `permissions-repo`, and organization `Members: read`.
+
+## Demo
+
+A user sees:
+
+![A github PR where an unknown contributor opens a PR, the bot closes it, a
+maintainer /vouch allows it, and the bot re-opens it](./public.png)
+
+A member of the vouch-team sees:
+
+![The above PR, with a commit to the contributor-permissions repo mentioned in
+the stream](./maintainer.png)
+
 
 ## Development
 

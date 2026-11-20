@@ -99,7 +99,7 @@ into `.github/workflows/`.
 | `allowlist-path`    | yes      | Path to the allowlist within `permissions-repo`. |
 | `blocklist-path`    | no       | Path to the blocklist within `permissions-repo`. The blocklist is off when empty. |
 | `vouch-team`        | no       | `org/team-slug` whose members can `/vouch`. Vouching is off when empty. |
-| `message`           | yes      | Comment posted before closing. `{author}` is replaced with the PR author's login. |
+| `message`           | yes      | Comment posted before closing. `{author}` is replaced with the PR author's login. Hard-wrapped lines in a paragraph are joined, so wrap freely and separate paragraphs with a blank line. |
 | `blocked-message`   | if `blocklist-path` | Comment posted before closing a blocked author's PR. `{author}` is substituted as in `message`. |
 | `token`             | no       | Token used to list, comment on, and close PRs. Defaults to `github.token`. |
 

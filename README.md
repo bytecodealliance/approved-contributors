@@ -105,6 +105,19 @@ into `.github/workflows/`.
 
 Output `closed` is a JSON array of the PR numbers closed by this run.
 
+Each run ends its log with an audit log of every write it made, one line per
+action, printed even if the run fails partway:
+
+```text
+Audit log: 4 action(s) taken.
+  2026-11-20T10:00:01.123Z commit file=org/gov:approved.txt sha=3f9c... message="allow newbie by maint"
+  2026-11-20T10:00:01.456Z reopen pr=7 via=https://github.com/org/proj/pull/7#issuecomment-1
+  2026-11-20T10:00:02.789Z comment pr=9 author=mallory url=https://github.com/org/proj/pull/9#issuecomment-2
+  2026-11-20T10:00:03.012Z close pr=9 author=mallory reason=not-approved
+```
+
+`reason` is `not-approved` or `blocked`.
+
 If the allowlist cannot be fetched or is empty, or `blocklist-path` is set
 but cannot be fetched, the action fails rather than closing anything. An
 empty blocklist is fine.

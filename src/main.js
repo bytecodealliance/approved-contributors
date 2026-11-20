@@ -30,6 +30,19 @@ function setOutput(name, value) {
   }
 }
 
+// Records a write the run made, for the audit log printed at exit.
+function audit(ctx, action, details) {
+  ctx.audit.push({ time: new Date().toISOString(), action, ...details });
+}
+
+function printAudit(entries) {
+  console.log(`Audit log: ${entries.length} action(s) taken.`);
+  for (const { time, action, ...details } of entries) {
+    const fields = Object.entries(details).map(([k, v]) => `${k}=${v}`);
+    console.log(`  ${time} ${action} ${fields.join(" ")}`);
+  }
+}
+
 async function github(token, url, { method = "GET", body, allow404 = false } = {}) {
   const res = await fetch(url, {
     method,
@@ -93,17 +106,23 @@ async function writeList(ctx, list, text, message) {
   });
   list.text = text;
   list.sha = (await res.json()).content.sha;
+  audit(ctx, "commit", {
+    file: `${ctx.permsRepo}:${list.path}`,
+    sha: list.sha,
+    message: JSON.stringify(message.split("\n")[0]),
+  });
   list.logins = parseList(text);
 }
 
 
-async function reopen(ctx, number) {
+async function reopen(ctx, number, via) {
   console.log(`Reopening #${number}.`);
   try {
     await github(ctx.token, `${ctx.repoUrl}/pulls/${number}`, {
       method: "PATCH",
       body: { state: "open" },
     });
+    audit(ctx, "reopen", { pr: number, via });
   } catch (err) {
     // e.g. the head branch was deleted; don't let one PR block the sweep.
     console.log(`::warning::Could not reopen #${number}: ${err.message}`);
@@ -224,7 +243,7 @@ async function processVouches(ctx, allow, block) {
       if (reopened.has(pr.number)) continue;
       if (pr.state === "closed" && !pr.merged && Date.parse(pr.closed_at) < Date.parse(c.created_at)) {
         reopened.add(pr.number);
-        await reopen(ctx, pr.number);
+        await reopen(ctx, pr.number, c.html_url);
       }
     }
   }
@@ -254,14 +273,17 @@ async function closeUnapproved(ctx, allow, block) {
     console.log(
       `Closing #${pr.number}: ${author} is ${blocked ? "blocked" : "not an approved contributor"}.`,
     );
-    await github(ctx.token, `${ctx.repoUrl}/issues/${pr.number}/comments`, {
+    const reason = blocked ? "blocked" : "not-approved";
+    const res = await github(ctx.token, `${ctx.repoUrl}/issues/${pr.number}/comments`, {
       method: "POST",
       body: { body: renderMessage(blocked ? ctx.blockedMessage : ctx.message, author) },
     });
+    audit(ctx, "comment", { pr: pr.number, author, url: (await res.json()).html_url });
     await github(ctx.token, `${ctx.repoUrl}/pulls/${pr.number}`, {
       method: "PATCH",
       body: { state: "closed" },
     });
+    audit(ctx, "close", { pr: pr.number, author, reason });
     closed.push(pr.number);
   }
   return closed;
@@ -283,7 +305,17 @@ async function run() {
     allowPath: input("allowlist-path", { required: true }),
     blockPath: input("blocklist-path"),
     vouchTeam: input("vouch-team"),
+    audit: [],
   };
+  try {
+    await sweep(ctx);
+  } finally {
+    // Also on failure, so partial runs are accounted for.
+    printAudit(ctx.audit);
+  }
+}
+
+async function sweep(ctx) {
   if (ctx.blockPath) ctx.blockedMessage = input("blocked-message", { required: true });
   parsePair(ctx.permsRepo, "permissions-repo");
 

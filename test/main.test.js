@@ -18,6 +18,7 @@ const b64 = (s) => Buffer.from(s).toString("base64");
 //   team:        vouch-team member logins (null: team endpoint 404s)
 //   comments:    issue comments returned by /issues/comments
 //   pulls:       PR number -> PR object for GET /pulls/:n
+//   fail:        "METHOD /path" requests that get a 500
 async function runAction({
   pages = [[]],
   list,
@@ -31,6 +32,7 @@ async function runAction({
   team = [],
   comments = [],
   pulls = {},
+  fail = [],
 }) {
   const requests = [];
   let n = 0;
@@ -55,6 +57,7 @@ async function runAction({
       const base = `http://127.0.0.1:${server.address().port}`;
       const url = new URL(req.url, base);
       const path = url.pathname;
+      if (fail.includes(`${req.method} ${path}`)) return res.writeHead(500).end("{}");
       const file = files[/^\/repos\/org\/gov\/contents\/(.*)$/.exec(path)?.[1]];
       if (file) {
         if (req.method === "PUT") {
@@ -91,6 +94,11 @@ async function runAction({
       if (path === "/repos/org/proj/issues/comments") {
         return res.writeHead(200, json).end(JSON.stringify(comments));
       }
+      const posted = /^\/repos\/org\/proj\/issues\/(\d+)\/comments$/.exec(path);
+      if (req.method === "POST" && posted) {
+        const html_url = `https://github.com/org/proj/pull/${posted[1]}#issuecomment-c${posted[1]}`;
+        return res.writeHead(201, json).end(JSON.stringify({ html_url }));
+      }
       res.writeHead(200, json).end("{}");
     });
   });
@@ -115,8 +123,8 @@ async function runAction({
     "INPUT_BLOCKED-MESSAGE": blockedMessage,
     INPUT_TOKEN: "pr-tok",
   };
-  const code = await new Promise((resolve) => {
-    execFile(process.execPath, [MAIN], { env }, (err) => resolve(err ? err.code : 0));
+  const [code, stdout] = await new Promise((resolve) => {
+    execFile(process.execPath, [MAIN], { env }, (err, out) => resolve([err ? err.code : 0, out]));
   });
   server.close();
   const writes = requests
@@ -129,6 +137,12 @@ async function runAction({
     listText: files["approved.txt"].text,
     blockText: files["blocked.txt"].text,
     output: readFileSync(outputPath, "utf8"),
+    // Audit entries with the timestamp stripped.
+    audit: stdout
+      .split("\n")
+      .filter((l) => /^  \d{4}-\S+Z /.test(l))
+      .map((l) => l.trim().replace(/^\S+ /, "")),
+    stdout,
   };
 }
 
@@ -539,4 +553,54 @@ test("manually blocked authors: allow is ignored", async () => {
     pulls: { 7: closedPr },
   });
   assert.deepEqual(writes, []);
+});
+
+test("audit log: closes", async () => {
+  const { audit, stdout } = await runAction({
+    pages: [["alice", "mallory", "eve"]],
+    list: "alice\n",
+    block: "eve\n",
+  });
+  assert.match(stdout, /Audit log: 4 action\(s\) taken\./);
+  assert.deepEqual(audit, [
+    "comment pr=2 author=mallory url=https://github.com/org/proj/pull/2#issuecomment-c2",
+    "close pr=2 author=mallory reason=not-approved",
+    "comment pr=3 author=eve url=https://github.com/org/proj/pull/3#issuecomment-c3",
+    "close pr=3 author=eve reason=blocked",
+  ]);
+});
+
+test("audit log: commits and reopens", async () => {
+  const { audit } = await runAction({
+    list: "alice\n",
+    vouchTeam: "org/maintainers",
+    team: ["maint"],
+    comments: [comment(1, "maint", "/vouch allow")],
+    pulls: { 7: closedPr },
+  });
+  assert.deepEqual(audit, [
+    'commit file=org/gov:approved.txt sha=sha1 message="allow newbie by maint"',
+    "reopen pr=7 via=https://github.com/org/proj/pull/7#issuecomment-1",
+  ]);
+});
+
+test("audit log: nothing done", async () => {
+  const { audit, stdout } = await runAction({ pages: [["alice"]], list: "alice\n" });
+  assert.match(stdout, /Audit log: 0 action\(s\) taken\./);
+  assert.deepEqual(audit, []);
+});
+
+test("audit log: printed when the run fails partway", async () => {
+  const { code, audit, stdout } = await runAction({
+    pages: [["mallory", "eve"]],
+    list: "alice\n",
+    fail: ["PATCH /repos/org/proj/pulls/2"],
+  });
+  assert.equal(code, 1);
+  assert.match(stdout, /::error::PATCH .* 500/);
+  assert.deepEqual(audit, [
+    "comment pr=1 author=mallory url=https://github.com/org/proj/pull/1#issuecomment-c1",
+    "close pr=1 author=mallory reason=not-approved",
+    "comment pr=2 author=eve url=https://github.com/org/proj/pull/2#issuecomment-c2",
+  ]);
 });

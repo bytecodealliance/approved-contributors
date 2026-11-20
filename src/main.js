@@ -15,6 +15,9 @@ import {
 // skipped scheduled runs don't miss any.
 const VOUCH_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 
+// Only PRs opened this recently are closed; older ones are left alone.
+const CLOSE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
 function input(name, { required = false } = {}) {
   const value = (process.env[`INPUT_${name.toUpperCase()}`] ?? "").trim();
   if (required && !value) throw new Error(`Input required and not supplied: ${name}`);
@@ -231,7 +234,18 @@ async function processVouches(ctx, allow, block) {
 async function closeUnapproved(ctx, allow, block) {
   const writers = new Map();
   const closed = [];
-  for (const pr of await paginate(ctx.token, `${ctx.repoUrl}/pulls?state=open&per_page=100`)) {
+  const cutoff = Date.now() - CLOSE_MAX_AGE_MS;
+  let url = `${ctx.repoUrl}/pulls?state=open&sort=created&direction=desc&per_page=100`;
+  const recent = [];
+  while (url) {
+    const res = await github(ctx.token, url);
+    const page = await res.json();
+    const fresh = page.filter((pr) => Date.parse(pr.created_at) >= cutoff);
+    recent.push(...fresh);
+    // Newest first, so a page with any old PR is the last one we need.
+    url = fresh.length === page.length ? nextLink(res.headers.get("link")) : null;
+  }
+  for (const pr of recent) {
     const author = pr.user.login;
     const blocked = block !== null && isApproved(block.logins, author);
     if (!blocked && isApproved(allow.logins, author)) continue;

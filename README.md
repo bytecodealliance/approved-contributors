@@ -7,13 +7,15 @@ small set of /vouch commands from maintainers to manage the allowlist.
 ## How it works
 
 Each run sweeps the repository: it fetches the allowlist and blocklist,
-enumerates all open pull requests through the API, and comments on and closes
-every one whose author is neither on the list nor has write (or admin, or
+enumerates open pull requests opened within the last 24 hours, and comments
+on and closes every one whose author is neither on the list nor has write (or admin, or
 maintain) access to the repository. Write access is checked with the
 [collaborator permission
 API](https://docs.github.com/en/rest/collaborators/collaborators#get-repository-permissions-for-a-user),
 which reflects grants from teams and organization base permissions, so
-maintainers never need to be listed.
+maintainers never need to be listed. Pull requests older than 24 hours are
+never closed, so enabling the action (or revoking/blocking someone) does not
+close long-standing PRs.
 
 An optional blocklist, in the same repository as the allowlist, names
 accounts that are unwelcome to contribute. Their PRs are closed with a
@@ -40,8 +42,8 @@ commenting on a pull request:
 | Comment                                 | Effect |
 |-----------------------------------------|--------|
 | `/vouch allow` or just `/vouch`         | Add the PR author to the allowlist, and reopen the PR if it was closed before the comment. |
-| `/vouch revoke`                         | Remove the PR author from the allowlist. The next sweep closes their open PRs. |
-| `/vouch block`                          | Add the PR author to the blocklist (requires `blocklist-path`). The next sweep closes their open PRs with `blocked-message`. |
+| `/vouch revoke`                         | Remove the PR author from the allowlist. The next sweep closes their open PRs opened in the last 24 hours. |
+| `/vouch block`                          | Add the PR author to the blocklist (requires `blocklist-path`). The next sweep closes their open PRs opened in the last 24 hours with `blocked-message`. |
 
 Revoking means the author needs a new vouch; blocking is a stronger judgment
 that the account is unwelcome. There is no command to unblock: maintainers

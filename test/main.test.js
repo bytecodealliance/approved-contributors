@@ -34,7 +34,14 @@ async function runAction({
 }) {
   const requests = [];
   let n = 0;
-  const pageData = pages.map((p) => p.map((login) => ({ number: ++n, user: { login } })));
+  // Each entry is a login, or [login, ageInHours] (default: 1 hour old).
+  const pageData = pages.map((p) =>
+    p.map((e) => {
+      const [login, hours = 1] = Array.isArray(e) ? e : [e];
+      const created_at = new Date(Date.now() - hours * 3600e3).toISOString();
+      return { number: ++n, created_at, user: { login } };
+    }),
+  );
   const files = {
     "approved.txt": { text: list, sha: "sha0", status: listStatus },
     "blocked.txt": { text: block, sha: "sha0", status: blockStatus },
@@ -157,6 +164,25 @@ test("authors with write access are never closed", async () => {
   // One permission lookup per distinct author.
   assert.equal(requests.filter((r) => r.url.includes("/collaborators/")).length, 4);
   assert.equal(output, "closed=[4,5]\n");
+});
+
+test("PRs opened more than 24 hours ago are not closed", async () => {
+  const { code, requests, writes, output } = await runAction({
+    pages: [["mallory", ["eve", 23]], [["oldie", 25]], ["unreached"]],
+    list: "alice\n",
+  });
+  assert.equal(code, 0);
+  assert.deepEqual(writes.map(([m, u]) => [m, u]), [
+    ["POST", "/repos/org/proj/issues/1/comments"],
+    ["PATCH", "/repos/org/proj/pulls/1"],
+    ["POST", "/repos/org/proj/issues/2/comments"],
+    ["PATCH", "/repos/org/proj/pulls/2"],
+  ]);
+  assert.equal(output, "closed=[1,2]\n");
+  // Newest-first ordering lets us stop at the first page with an old PR.
+  const lists = requests.filter((r) => r.url.startsWith("/repos/org/proj/pulls?"));
+  assert.equal(lists.length, 2);
+  assert.match(lists[0].url, /sort=created&direction=desc/);
 });
 
 test("listed authors skip the permission lookup", async () => {

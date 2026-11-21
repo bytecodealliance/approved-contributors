@@ -19,6 +19,8 @@ const b64 = (s) => Buffer.from(s).toString("base64");
 //   comments:    issue comments returned by /issues/comments
 //   pulls:       PR number -> PR object for GET /pulls/:n
 //   fail:        "METHOD /path" requests that get a 500
+//   dryRun:      value of the dry-run input
+//   serverUrl:   GITHUB_SERVER_URL (undefined: unset)
 async function runAction({
   pages = [[]],
   list,
@@ -33,6 +35,8 @@ async function runAction({
   comments = [],
   pulls = {},
   fail = [],
+  dryRun = "",
+  serverUrl,
 }) {
   const requests = [];
   let n = 0;
@@ -122,6 +126,8 @@ async function runAction({
     INPUT_MESSAGE: "Sorry @{author}",
     "INPUT_BLOCKED-MESSAGE": blockedMessage,
     INPUT_TOKEN: "pr-tok",
+    "INPUT_DRY-RUN": dryRun,
+    ...(serverUrl && { GITHUB_SERVER_URL: serverUrl }),
   };
   const [code, stdout] = await new Promise((resolve) => {
     execFile(process.execPath, [MAIN], { env }, (err, out) => resolve([err ? err.code : 0, out]));
@@ -563,10 +569,10 @@ test("audit log: closes", async () => {
   });
   assert.match(stdout, /Audit log: 4 action\(s\) taken\./);
   assert.deepEqual(audit, [
-    "comment pr=2 author=mallory url=https://github.com/org/proj/pull/2#issuecomment-c2",
-    "close pr=2 author=mallory reason=not-approved",
-    "comment pr=3 author=eve url=https://github.com/org/proj/pull/3#issuecomment-c3",
-    "close pr=3 author=eve reason=blocked",
+    "comment pr=https://github.com/org/proj/pull/2 author=mallory url=https://github.com/org/proj/pull/2#issuecomment-c2",
+    "close pr=https://github.com/org/proj/pull/2 author=mallory reason=not-approved",
+    "comment pr=https://github.com/org/proj/pull/3 author=eve url=https://github.com/org/proj/pull/3#issuecomment-c3",
+    "close pr=https://github.com/org/proj/pull/3 author=eve reason=blocked",
   ]);
 });
 
@@ -579,8 +585,8 @@ test("audit log: commits and reopens", async () => {
     pulls: { 7: closedPr },
   });
   assert.deepEqual(audit, [
-    'commit file=org/gov:approved.txt sha=sha1 message="allow newbie by maint"',
-    "reopen pr=7 via=https://github.com/org/proj/pull/7#issuecomment-1",
+    'commit file=org/gov:approved.txt sha=sha1 pr=https://github.com/org/proj/pull/7 message="allow newbie by maint"',
+    "reopen pr=https://github.com/org/proj/pull/7 via=https://github.com/org/proj/pull/7#issuecomment-1",
   ]);
 });
 
@@ -599,8 +605,55 @@ test("audit log: printed when the run fails partway", async () => {
   assert.equal(code, 1);
   assert.match(stdout, /::error::PATCH .* 500/);
   assert.deepEqual(audit, [
-    "comment pr=1 author=mallory url=https://github.com/org/proj/pull/1#issuecomment-c1",
-    "close pr=1 author=mallory reason=not-approved",
-    "comment pr=2 author=eve url=https://github.com/org/proj/pull/2#issuecomment-c2",
+    "comment pr=https://github.com/org/proj/pull/1 author=mallory url=https://github.com/org/proj/pull/1#issuecomment-c1",
+    "close pr=https://github.com/org/proj/pull/1 author=mallory reason=not-approved",
+    "comment pr=https://github.com/org/proj/pull/2 author=eve url=https://github.com/org/proj/pull/2#issuecomment-c2",
   ]);
+});
+
+test("dry run: no writes, audit lists what would happen", async () => {
+  const { code, requests, writes, audit, stdout, output, listText, blockText } = await runAction({
+    dryRun: "true",
+    serverUrl: "https://ghe.example",
+    pages: [["alice", "newbie", "mallory", "eve"]],
+    list: "alice\nrevoked\n",
+    block: "eve\n",
+    vouchTeam: "org/maintainers",
+    team: ["maint"],
+    comments: [
+      comment(1, "maint", "/vouch allow", 7),
+      comment(2, "maint", "/vouch revoke", 8),
+      comment(3, "maint", "/vouch block", 9),
+    ],
+    pulls: {
+      7: closedPr,
+      8: { ...closedPr, number: 8, user: { login: "revoked" } },
+      9: { ...closedPr, number: 9, user: { login: "spammer" } },
+    },
+  });
+  assert.equal(code, 0);
+  assert.deepEqual(writes, []);
+  assert.ok(requests.every((r) => r.method === "GET"));
+  assert.equal(listText, "alice\nrevoked\n");
+  assert.equal(blockText, "eve\n");
+  assert.match(stdout, /Audit log \(dry run\): 8 action\(s\) would be taken\./);
+  const pr = (n) => `https://ghe.example/org/proj/pull/${n}`;
+  assert.deepEqual(audit, [
+    `commit file=org/gov:approved.txt pr=${pr(7)} message="allow newbie by maint"`,
+    `reopen pr=${pr(7)} via=https://github.com/org/proj/pull/7#issuecomment-1`,
+    `commit file=org/gov:approved.txt pr=${pr(8)} message="revoke revoked by maint"`,
+    `commit file=org/gov:blocked.txt pr=${pr(9)} message="block spammer by maint"`,
+    // newbie was allowed in memory, so PR 2 is not closed.
+    `comment pr=${pr(3)} author=mallory`,
+    `close pr=${pr(3)} author=mallory reason=not-approved`,
+    `comment pr=${pr(4)} author=eve`,
+    `close pr=${pr(4)} author=eve reason=blocked`,
+  ]);
+  assert.equal(output, "closed=[]\n");
+});
+
+test("dry run: invalid value fails", async () => {
+  const { code, requests } = await runAction({ dryRun: "yes", list: "alice\n" });
+  assert.equal(code, 1);
+  assert.equal(requests.length, 0);
 });

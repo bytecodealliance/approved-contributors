@@ -102,6 +102,7 @@ into `.github/workflows/`.
 | `message`           | yes      | Comment posted before closing. `{author}` is replaced with the PR author's login. Hard-wrapped lines in a paragraph are joined, so wrap freely and separate paragraphs with a blank line. |
 | `blocked-message`   | if `blocklist-path` | Comment posted before closing a blocked author's PR. `{author}` is substituted as in `message`. |
 | `token`             | no       | Token used to list, comment on, and close PRs. Defaults to `github.token`. |
+| `dry-run`           | no       | `true` to change nothing (no comments, closes, reopens, or list commits) and only print the audit log of what would be done. Defaults to `false`. |
 
 Output `closed` is a JSON array of the PR numbers closed by this run.
 
@@ -110,13 +111,20 @@ action, printed even if the run fails partway:
 
 ```text
 Audit log: 4 action(s) taken.
-  2026-11-20T10:00:01.123Z commit file=org/gov:approved.txt sha=3f9c... message="allow newbie by maint"
-  2026-11-20T10:00:01.456Z reopen pr=7 via=https://github.com/org/proj/pull/7#issuecomment-1
-  2026-11-20T10:00:02.789Z comment pr=9 author=mallory url=https://github.com/org/proj/pull/9#issuecomment-2
-  2026-11-20T10:00:03.012Z close pr=9 author=mallory reason=not-approved
+  2026-11-20T10:00:01.123Z commit file=org/gov:approved.txt sha=3f9c... pr=https://github.com/org/proj/pull/7 message="allow newbie by maint"
+  2026-11-20T10:00:01.456Z reopen pr=https://github.com/org/proj/pull/7 via=https://github.com/org/proj/pull/7#issuecomment-1
+  2026-11-20T10:00:02.789Z comment pr=https://github.com/org/proj/pull/9 author=mallory url=https://github.com/org/proj/pull/9#issuecomment-2
+  2026-11-20T10:00:03.012Z close pr=https://github.com/org/proj/pull/9 author=mallory reason=not-approved
 ```
 
-`reason` is `not-approved` or `blocked`.
+`reason` is `not-approved` or `blocked`. For a `commit`, `pr` is the PR
+carrying the `/vouch` comment.
+
+With `dry-run: true`, the header reads `Audit log (dry run): N action(s)
+would be taken.` and entries omit `sha` and the comment `url`, which only
+exist once the write is made. Within a dry run, list changes from vouches
+are applied in memory, so the PRs it reports it would close are those a
+real run would close. The `closed` output is always `[]`.
 
 If the allowlist cannot be fetched or is empty, or `blocklist-path` is set
 but cannot be fetched, the action fails rather than closing anything. An

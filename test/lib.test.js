@@ -27,6 +27,42 @@ test("renderMessage substitutes every {author}", () => {
   assert.equal(renderMessage("Hi @{author}, {author}!", "bob"), "Hi @bob, bob!");
 });
 
+test("renderMessage joins hard-wrapped paragraphs", () => {
+  const template =
+    "Thanks @{author} for your contribution, but\nthis bot is closing this PR.\n\n" +
+    "See [the contributing\ndocs](https://example.com).\n";
+  assert.equal(
+    renderMessage(template, "bob"),
+    "Thanks @bob for your contribution, but this bot is closing this PR.\n\n" +
+      "See [the contributing docs](https://example.com).\n",
+  );
+});
+
+test("renderMessage keeps block markdown on its own lines", () => {
+  const template = [
+    "# Closed",
+    "Intro line one",
+    "line two:",
+    "- item one",
+    "- item two",
+    "1. first",
+    "> quoted",
+    "| a | b |",
+    "|---|---|",
+    "```",
+    "code line",
+    "more code",
+    "```",
+    "    indented code",
+    "after",
+    "",
+  ].join("\n");
+  assert.equal(
+    renderMessage(template, "bob"),
+    template.replace("Intro line one\nline two:", "Intro line one line two:"),
+  );
+});
+
 test("parsePair", () => {
   assert.deepEqual(parsePair("org/repo.name", "x"), ["org", "repo.name"]);
   assert.throws(() => parsePair("org", "x"), /x must be/);

@@ -7,13 +7,15 @@ small set of /vouch commands from maintainers to manage the allowlist.
 ## How it works
 
 Each run sweeps the repository: it fetches the allowlist and blocklist,
-enumerates all open pull requests through the API, and comments on and closes
-every one whose author is neither on the list nor has write (or admin, or
+enumerates open pull requests opened within the last 24 hours, and comments
+on and closes every one whose author is neither on the list nor has write (or admin, or
 maintain) access to the repository. Write access is checked with the
 [collaborator permission
 API](https://docs.github.com/en/rest/collaborators/collaborators#get-repository-permissions-for-a-user),
 which reflects grants from teams and organization base permissions, so
-maintainers never need to be listed.
+maintainers never need to be listed. Pull requests older than 24 hours are
+never closed, so enabling the action (or revoking/blocking someone) does not
+close long-standing PRs.
 
 An optional blocklist, in the same repository as the allowlist, names
 accounts that are unwelcome to contribute. Their PRs are closed with a
@@ -40,8 +42,8 @@ commenting on a pull request:
 | Comment                                 | Effect |
 |-----------------------------------------|--------|
 | `/vouch allow` or just `/vouch`         | Add the PR author to the allowlist, and reopen the PR if it was closed before the comment. |
-| `/vouch revoke`                         | Remove the PR author from the allowlist. The next sweep closes their open PRs. |
-| `/vouch block`                          | Add the PR author to the blocklist (requires `blocklist-path`). The next sweep closes their open PRs with `blocked-message`. |
+| `/vouch revoke`                         | Remove the PR author from the allowlist. The next sweep closes their open PRs opened in the last 24 hours. |
+| `/vouch block`                          | Add the PR author to the blocklist (requires `blocklist-path`). The next sweep closes their open PRs opened in the last 24 hours with `blocked-message`. |
 
 Revoking means the author needs a new vouch; blocking is a stronger judgment
 that the account is unwelcome. There is no command to unblock: maintainers
@@ -97,11 +99,32 @@ into `.github/workflows/`.
 | `allowlist-path`    | yes      | Path to the allowlist within `permissions-repo`. |
 | `blocklist-path`    | no       | Path to the blocklist within `permissions-repo`. The blocklist is off when empty. |
 | `vouch-team`        | no       | `org/team-slug` whose members can `/vouch`. Vouching is off when empty. |
-| `message`           | yes      | Comment posted before closing. `{author}` is replaced with the PR author's login. |
+| `message`           | yes      | Comment posted before closing. `{author}` is replaced with the PR author's login. Hard-wrapped lines in a paragraph are joined, so wrap freely and separate paragraphs with a blank line. |
 | `blocked-message`   | if `blocklist-path` | Comment posted before closing a blocked author's PR. `{author}` is substituted as in `message`. |
 | `token`             | no       | Token used to list, comment on, and close PRs. Defaults to `github.token`. |
+| `dry-run`           | no       | `true` to change nothing (no comments, closes, reopens, or list commits) and only print the audit log of what would be done. Defaults to `false`. |
 
 Output `closed` is a JSON array of the PR numbers closed by this run.
+
+Each run ends its log with an audit log of every write it made, one line per
+action, printed even if the run fails partway:
+
+```text
+Audit log: 4 action(s) taken.
+  2026-11-20T10:00:01.123Z commit file=org/gov:approved.txt sha=3f9c... pr=https://github.com/org/proj/pull/7 message="allow newbie by maint"
+  2026-11-20T10:00:01.456Z reopen pr=https://github.com/org/proj/pull/7 via=https://github.com/org/proj/pull/7#issuecomment-1
+  2026-11-20T10:00:02.789Z comment pr=https://github.com/org/proj/pull/9 author=mallory url=https://github.com/org/proj/pull/9#issuecomment-2
+  2026-11-20T10:00:03.012Z close pr=https://github.com/org/proj/pull/9 author=mallory reason=not-approved
+```
+
+`reason` is `not-approved` or `blocked`. For a `commit`, `pr` is the PR
+carrying the `/vouch` comment.
+
+With `dry-run: true`, the header reads `Audit log (dry run): N action(s)
+would be taken.` and entries omit `sha` and the comment `url`, which only
+exist once the write is made. Within a dry run, list changes from vouches
+are applied in memory, so the PRs it reports it would close are those a
+real run would close. The `closed` output is always `[]`.
 
 If the allowlist cannot be fetched or is empty, or `blocklist-path` is set
 but cannot be fetched, the action fails rather than closing anything. An

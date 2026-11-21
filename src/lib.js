@@ -14,8 +14,30 @@ export function isApproved(logins, author) {
   return logins.has(author.toLowerCase());
 }
 
+// Lines that must keep their own line: blank, indented (code), lists,
+// headings, quotes, tables, fences, and rules.
+const STANDALONE = /^(\s*$|\s|[-*+>#|]|\d+[.)]\s|```|~~~)/;
+
+// GitHub renders every newline in a comment as a line break, so lines
+// hard-wrapped in YAML are joined back into flowing paragraphs.
+export function unwrap(text) {
+  const out = [];
+  let fenced = false;
+  for (const line of text.replace(/\r\n/g, "\n").split("\n")) {
+    const fence = /^(```|~~~)/.test(line);
+    const prev = out.length ? out[out.length - 1] : null;
+    if (!fenced && !fence && prev !== null && !STANDALONE.test(prev) && !STANDALONE.test(line)) {
+      out[out.length - 1] = `${prev} ${line.trim()}`;
+    } else {
+      out.push(line);
+    }
+    if (fence) fenced = !fenced;
+  }
+  return out.join("\n");
+}
+
 export function renderMessage(template, author) {
-  return template.replaceAll("{author}", author);
+  return unwrap(template).replaceAll("{author}", author);
 }
 
 export function appendLogin(text, login) {

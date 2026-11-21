@@ -15,6 +15,9 @@ import {
 // skipped scheduled runs don't miss any.
 const VOUCH_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 
+// Only PRs opened this recently are closed; older ones are left alone.
+const CLOSE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
 function input(name, { required = false } = {}) {
   const value = (process.env[`INPUT_${name.toUpperCase()}`] ?? "").trim();
   if (required && !value) throw new Error(`Input required and not supplied: ${name}`);
@@ -24,6 +27,24 @@ function input(name, { required = false } = {}) {
 function setOutput(name, value) {
   if (process.env.GITHUB_OUTPUT) {
     appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
+  }
+}
+
+// Records a write the run made, for the audit log printed at exit.
+function audit(ctx, action, details) {
+  ctx.audit.push({ time: new Date().toISOString(), action, ...details });
+}
+
+function printAudit(ctx) {
+  const entries = ctx.audit;
+  console.log(
+    ctx.dryRun
+      ? `Audit log (dry run): ${entries.length} action(s) would be taken.`
+      : `Audit log: ${entries.length} action(s) taken.`,
+  );
+  for (const { time, action, ...details } of entries) {
+    const fields = Object.entries(details).map(([k, v]) => `${k}=${v}`);
+    console.log(`  ${time} ${action} ${fields.join(" ")}`);
   }
 }
 
@@ -78,29 +99,46 @@ async function readList(ctx, path) {
   return { path, text, sha: file.sha, logins: parseList(text) };
 }
 
-async function writeList(ctx, list, text, message) {
-  const res = await github(ctx.permsToken, contentsUrl(ctx.apiUrl, ctx.permsRepo, list.path), {
-    method: "PUT",
-    body: {
-      message,
-      content: Buffer.from(text).toString("base64"),
-      sha: list.sha,
-      ...(ctx.permsRef && { branch: ctx.permsRef }),
-    },
-  });
+function prUrl(ctx, number) {
+  return `${ctx.serverUrl}/${ctx.repo}/pull/${number}`;
+}
+
+// In dry-run, only the in-memory list changes, so later decisions in the
+// run match what a real run would do.
+async function writeList(ctx, list, text, message, pr) {
+  if (!ctx.dryRun) {
+    const res = await github(ctx.permsToken, contentsUrl(ctx.apiUrl, ctx.permsRepo, list.path), {
+      method: "PUT",
+      body: {
+        message,
+        content: Buffer.from(text).toString("base64"),
+        sha: list.sha,
+        ...(ctx.permsRef && { branch: ctx.permsRef }),
+      },
+    });
+    list.sha = (await res.json()).content.sha;
+  }
   list.text = text;
-  list.sha = (await res.json()).content.sha;
   list.logins = parseList(text);
+  audit(ctx, "commit", {
+    file: `${ctx.permsRepo}:${list.path}`,
+    ...(!ctx.dryRun && { sha: list.sha }),
+    pr: prUrl(ctx, pr),
+    message: JSON.stringify(message.split("\n")[0]),
+  });
 }
 
 
-async function reopen(ctx, number) {
-  console.log(`Reopening #${number}.`);
+async function reopen(ctx, number, via) {
+  console.log(`${ctx.dryRun ? "Would reopen" : "Reopening"} #${number}.`);
   try {
-    await github(ctx.token, `${ctx.repoUrl}/pulls/${number}`, {
-      method: "PATCH",
-      body: { state: "open" },
-    });
+    if (!ctx.dryRun) {
+      await github(ctx.token, `${ctx.repoUrl}/pulls/${number}`, {
+        method: "PATCH",
+        body: { state: "open" },
+      });
+    }
+    audit(ctx, "reopen", { pr: prUrl(ctx, number), via });
   } catch (err) {
     // e.g. the head branch was deleted; don't let one PR block the sweep.
     console.log(`::warning::Could not reopen #${number}: ${err.message}`);
@@ -188,6 +226,7 @@ async function processVouches(ctx, allow, block) {
         block,
         appendLogin(block.text, author),
         `block ${author} by ${blockVouch.c.user.login}\n\nVia: ${blockVouch.c.html_url}`,
+        blockVouch.pr.number,
       );
     }
     if (!last) continue;
@@ -204,6 +243,7 @@ async function processVouches(ctx, allow, block) {
         allow,
         removeLogin(allow.text, author),
         `revoke ${author} by ${last.c.user.login}\n\nVia: ${last.c.html_url}`,
+        last.pr.number,
       );
       continue;
     }
@@ -214,6 +254,7 @@ async function processVouches(ctx, allow, block) {
         allow,
         appendLogin(allow.text, author),
         `allow ${author} by ${last.c.user.login}\n\nVia: ${last.c.html_url}`,
+        last.pr.number,
       );
     }
     const reopened = new Set();
@@ -221,7 +262,7 @@ async function processVouches(ctx, allow, block) {
       if (reopened.has(pr.number)) continue;
       if (pr.state === "closed" && !pr.merged && Date.parse(pr.closed_at) < Date.parse(c.created_at)) {
         reopened.add(pr.number);
-        await reopen(ctx, pr.number);
+        await reopen(ctx, pr.number, c.html_url);
       }
     }
   }
@@ -231,23 +272,44 @@ async function processVouches(ctx, allow, block) {
 async function closeUnapproved(ctx, allow, block) {
   const writers = new Map();
   const closed = [];
-  for (const pr of await paginate(ctx.token, `${ctx.repoUrl}/pulls?state=open&per_page=100`)) {
+  const cutoff = Date.now() - CLOSE_MAX_AGE_MS;
+  let url = `${ctx.repoUrl}/pulls?state=open&sort=created&direction=desc&per_page=100`;
+  const recent = [];
+  while (url) {
+    const res = await github(ctx.token, url);
+    const page = await res.json();
+    const fresh = page.filter((pr) => Date.parse(pr.created_at) >= cutoff);
+    recent.push(...fresh);
+    // Newest first, so a page with any old PR is the last one we need.
+    url = fresh.length === page.length ? nextLink(res.headers.get("link")) : null;
+  }
+  for (const pr of recent) {
     const author = pr.user.login;
     const blocked = block !== null && isApproved(block.logins, author);
     if (!blocked && isApproved(allow.logins, author)) continue;
     if (!writers.has(author)) writers.set(author, await hasWriteAccess(ctx, author));
     if (writers.get(author)) continue;
     console.log(
-      `Closing #${pr.number}: ${author} is ${blocked ? "blocked" : "not an approved contributor"}.`,
+      `${ctx.dryRun ? "Would close" : "Closing"} #${pr.number}: ` +
+        `${author} is ${blocked ? "blocked" : "not an approved contributor"}.`,
     );
-    await github(ctx.token, `${ctx.repoUrl}/issues/${pr.number}/comments`, {
+    const reason = blocked ? "blocked" : "not-approved";
+    const url = prUrl(ctx, pr.number);
+    if (ctx.dryRun) {
+      audit(ctx, "comment", { pr: url, author });
+      audit(ctx, "close", { pr: url, author, reason });
+      continue;
+    }
+    const res = await github(ctx.token, `${ctx.repoUrl}/issues/${pr.number}/comments`, {
       method: "POST",
       body: { body: renderMessage(blocked ? ctx.blockedMessage : ctx.message, author) },
     });
+    audit(ctx, "comment", { pr: url, author, url: (await res.json()).html_url });
     await github(ctx.token, `${ctx.repoUrl}/pulls/${pr.number}`, {
       method: "PATCH",
       body: { state: "closed" },
     });
+    audit(ctx, "close", { pr: url, author, reason });
     closed.push(pr.number);
   }
   return closed;
@@ -258,9 +320,16 @@ async function closeUnapproved(ctx, allow, block) {
 async function run() {
   const apiUrl = process.env.GITHUB_API_URL ?? "https://api.github.com";
   const token = input("token", { required: true });
+  const dryRun = input("dry-run") || "false";
+  if (dryRun !== "true" && dryRun !== "false") {
+    throw new Error(`dry-run must be "true" or "false", got "${dryRun}"`);
+  }
   const ctx = {
     apiUrl,
+    serverUrl: process.env.GITHUB_SERVER_URL ?? "https://github.com",
+    repo: process.env.GITHUB_REPOSITORY,
     repoUrl: `${apiUrl}/repos/${process.env.GITHUB_REPOSITORY}`,
+    dryRun: dryRun === "true",
     token,
     message: input("message", { required: true }),
     permsRepo: input("permissions-repo", { required: true }),
@@ -269,7 +338,17 @@ async function run() {
     allowPath: input("allowlist-path", { required: true }),
     blockPath: input("blocklist-path"),
     vouchTeam: input("vouch-team"),
+    audit: [],
   };
+  try {
+    await sweep(ctx);
+  } finally {
+    // Also on failure, so partial runs are accounted for.
+    printAudit(ctx);
+  }
+}
+
+async function sweep(ctx) {
   if (ctx.blockPath) ctx.blockedMessage = input("blocked-message", { required: true });
   parsePair(ctx.permsRepo, "permissions-repo");
 
@@ -283,7 +362,9 @@ async function run() {
   if (ctx.vouchTeam) await processVouches(ctx, allow, block);
 
   const closed = await closeUnapproved(ctx, allow, block);
-  console.log(closed.length ? `Closed ${closed.length} pull request(s).` : "Nothing to close.");
+  if (!ctx.dryRun) {
+    console.log(closed.length ? `Closed ${closed.length} pull request(s).` : "Nothing to close.");
+  }
   setOutput("closed", JSON.stringify(closed));
 }
 

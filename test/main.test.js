@@ -48,7 +48,7 @@ async function runAction({
       const base = `http://127.0.0.1:${server.address().port}`;
       const url = new URL(req.url, base);
       const path = url.pathname;
-      const file = files[/^\/repos\/org\/gov\/contents\/(.*)$/.exec(path)?.[1]];
+      const file = files[/^\/repos\/bytecodealliance\/gov\/contents\/(.*)$/.exec(path)?.[1]];
       if (file) {
         if (req.method === "PUT") {
           const put = JSON.parse(body);
@@ -60,28 +60,28 @@ async function runAction({
         if (file.status !== 200) return res.writeHead(file.status).end("{}");
         return res.writeHead(200, json).end(JSON.stringify({ content: b64(file.text), sha: file.sha }));
       }
-      if (req.method === "GET" && path === "/repos/org/proj/pulls") {
+      if (req.method === "GET" && path === "/repos/bytecodealliance/proj/pulls") {
         const page = Number(url.searchParams.get("page") ?? 1);
         const headers = { ...json };
         if (page < pageData.length) {
-          headers.Link = `<${base}/repos/org/proj/pulls?state=open&per_page=100&page=${page + 1}>; rel="next"`;
+          headers.Link = `<${base}/repos/bytecodealliance/proj/pulls?state=open&per_page=100&page=${page + 1}>; rel="next"`;
         }
         return res.writeHead(200, headers).end(JSON.stringify(pageData[page - 1] ?? []));
       }
-      const pull = /^\/repos\/org\/proj\/pulls\/(\d+)$/.exec(path);
+      const pull = /^\/repos\/bytecodealliance\/proj\/pulls\/(\d+)$/.exec(path);
       if (req.method === "GET" && pull) {
         return res.writeHead(200, json).end(JSON.stringify(pulls[pull[1]]));
       }
-      if (path.startsWith("/repos/org/proj/collaborators/")) {
+      if (path.startsWith("/repos/bytecodealliance/proj/collaborators/")) {
         const login = decodeURIComponent(path.split("/")[5]);
         if (!(login in permissions)) return res.writeHead(404).end("{}");
         return res.writeHead(200, json).end(JSON.stringify({ permission: permissions[login] }));
       }
-      if (path === "/orgs/org/teams/maintainers/members") {
+      if (path === "/orgs/bytecodealliance/teams/maintainers/members") {
         if (!team) return res.writeHead(404).end("{}");
         return res.writeHead(200, json).end(JSON.stringify(team.map((login) => ({ login }))));
       }
-      if (path === "/repos/org/proj/issues/comments") {
+      if (path === "/repos/bytecodealliance/proj/issues/comments") {
         return res.writeHead(200, json).end(JSON.stringify(comments));
       }
       res.writeHead(200, json).end("{}");
@@ -96,9 +96,9 @@ async function runAction({
   const env = {
     PATH: process.env.PATH,
     GITHUB_API_URL: `http://127.0.0.1:${server.address().port}`,
-    GITHUB_REPOSITORY: "org/proj",
+    GITHUB_REPOSITORY: "bytecodealliance/proj",
     GITHUB_OUTPUT: outputPath,
-    "INPUT_PERMISSIONS-REPO": "org/gov",
+    "INPUT_PERMISSIONS-REPO": "bytecodealliance/gov",
     "INPUT_PERMISSIONS-REF": "",
     "INPUT_PERMISSIONS-TOKEN": permissionsToken ?? "",
     "INPUT_ALLOWLIST-PATH": "approved.txt",
@@ -137,10 +137,10 @@ test("closes only unapproved authors, across pages", async () => {
   assert.equal(code, 0);
   assert.equal(requests[0].auth, "Bearer list-tok");
   assert.deepEqual(writes, [
-    ["POST", "/repos/org/proj/issues/2/comments", "Bearer pr-tok", { body: "Sorry @mallory" }],
-    ["PATCH", "/repos/org/proj/pulls/2", "Bearer pr-tok", { state: "closed" }],
-    ["POST", "/repos/org/proj/issues/3/comments", "Bearer pr-tok", { body: "Sorry @eve" }],
-    ["PATCH", "/repos/org/proj/pulls/3", "Bearer pr-tok", { state: "closed" }],
+    ["POST", "/repos/bytecodealliance/proj/issues/2/comments", "Bearer pr-tok", { body: "Sorry @mallory" }],
+    ["PATCH", "/repos/bytecodealliance/proj/pulls/2", "Bearer pr-tok", { state: "closed" }],
+    ["POST", "/repos/bytecodealliance/proj/issues/3/comments", "Bearer pr-tok", { body: "Sorry @eve" }],
+    ["PATCH", "/repos/bytecodealliance/proj/pulls/3", "Bearer pr-tok", { state: "closed" }],
   ]);
   assert.equal(output, "closed=[2,3]\n");
 });
@@ -153,10 +153,10 @@ test("authors with write access are never closed", async () => {
   });
   assert.equal(code, 0);
   assert.deepEqual(writes.map(([m, u]) => [m, u]), [
-    ["POST", "/repos/org/proj/issues/4/comments"],
-    ["PATCH", "/repos/org/proj/pulls/4"],
-    ["POST", "/repos/org/proj/issues/5/comments"],
-    ["PATCH", "/repos/org/proj/pulls/5"],
+    ["POST", "/repos/bytecodealliance/proj/issues/4/comments"],
+    ["PATCH", "/repos/bytecodealliance/proj/pulls/4"],
+    ["POST", "/repos/bytecodealliance/proj/issues/5/comments"],
+    ["PATCH", "/repos/bytecodealliance/proj/pulls/5"],
   ]);
   // One permission lookup per distinct author.
   assert.equal(requests.filter((r) => r.url.includes("/collaborators/")).length, 4);
@@ -200,7 +200,7 @@ const comment = (id, login, body, number = 7, extra = {}) => ({
   user: { login },
   created_at: T1,
   updated_at: T1,
-  html_url: `https://github.com/org/proj/pull/${number}#issuecomment-${id}`,
+  html_url: `https://github.com/bytecodealliance/proj/pull/${number}#issuecomment-${id}`,
   ...extra,
 });
 const closedPr = { number: 7, state: "closed", merged: false, closed_at: T0, user: { login: "newbie" } };
@@ -208,7 +208,7 @@ const closedPr = { number: 7, state: "closed", merged: false, closed_at: T0, use
 test("/vouch allow: commits to the list and reopens the PR", async () => {
   const { code, writes, listText, output } = await runAction({
     list: "alice\n",
-    vouchTeam: "org/maintainers",
+    vouchTeam: "bytecodealliance/maintainers",
     team: ["Maint"],
     comments: [comment(1, "maint", "/vouch allow")],
     pulls: { 7: closedPr },
@@ -218,15 +218,15 @@ test("/vouch allow: commits to the list and reopens the PR", async () => {
   assert.deepEqual(writes, [
     [
       "PUT",
-      "/repos/org/gov/contents/approved.txt",
+      "/repos/bytecodealliance/gov/contents/approved.txt",
       "Bearer list-tok",
       {
-        message: "allow newbie by maint\n\nVia: https://github.com/org/proj/pull/7#issuecomment-1",
+        message: "allow newbie by maint\n\nVia: https://github.com/bytecodealliance/proj/pull/7#issuecomment-1",
         content: b64("alice\nnewbie\n"),
         sha: "sha0",
       },
     ],
-    ["PATCH", "/repos/org/proj/pulls/7", "Bearer pr-tok", { state: "open" }],
+    ["PATCH", "/repos/bytecodealliance/proj/pulls/7", "Bearer pr-tok", { state: "open" }],
   ]);
   assert.equal(output, "closed=[]\n");
 });
@@ -235,31 +235,31 @@ test("/vouch allow keeps an open PR open in the same run", async () => {
   const { writes, listText, output } = await runAction({
     pages: [["newbie"]],
     list: "alice\n",
-    vouchTeam: "org/maintainers",
+    vouchTeam: "bytecodealliance/maintainers",
     team: ["maint"],
     comments: [comment(1, "maint", "/vouch allow")],
     pulls: { 7: { ...closedPr, state: "open", closed_at: null } },
   });
   assert.equal(listText, "alice\nnewbie\n");
-  assert.deepEqual(writes.map(([m, u]) => [m, u]), [["PUT", "/repos/org/gov/contents/approved.txt"]]);
+  assert.deepEqual(writes.map(([m, u]) => [m, u]), [["PUT", "/repos/bytecodealliance/gov/contents/approved.txt"]]);
   assert.equal(output, "closed=[]\n");
 });
 
 test("/vouch allow for an already-listed author: no commit", async () => {
   const { writes } = await runAction({
     list: "alice\nnewbie\n",
-    vouchTeam: "org/maintainers",
+    vouchTeam: "bytecodealliance/maintainers",
     team: ["maint"],
     comments: [comment(1, "maint", "/vouch allow")],
     pulls: { 7: closedPr },
   });
-  assert.deepEqual(writes.map(([m, u]) => [m, u]), [["PATCH", "/repos/org/proj/pulls/7"]]);
+  assert.deepEqual(writes.map(([m, u]) => [m, u]), [["PATCH", "/repos/bytecodealliance/proj/pulls/7"]]);
 });
 
 test("two vouches in one run chain list updates", async () => {
   const { writes, listText } = await runAction({
     list: "alice\n",
-    vouchTeam: "org/maintainers",
+    vouchTeam: "bytecodealliance/maintainers",
     team: ["maint"],
     comments: [comment(1, "maint", "/vouch allow", 7), comment(2, "maint", "/vouch allow", 8)],
     pulls: {
@@ -274,7 +274,7 @@ test("two vouches in one run chain list updates", async () => {
 test("PR closed after the vouch is not reopened", async () => {
   const { writes } = await runAction({
     list: "alice\nnewbie\n",
-    vouchTeam: "org/maintainers",
+    vouchTeam: "bytecodealliance/maintainers",
     team: ["maint"],
     comments: [comment(1, "maint", "/vouch allow")],
     pulls: { 7: { ...closedPr, closed_at: "2026-11-16T11:00:00Z" } },
@@ -285,7 +285,7 @@ test("PR closed after the vouch is not reopened", async () => {
 test("ignored vouches: non-team, edited, unknown command, issues, non-vouch", async () => {
   const { writes, requests } = await runAction({
     list: "alice\n",
-    vouchTeam: "org/maintainers",
+    vouchTeam: "bytecodealliance/maintainers",
     team: ["maint"],
     comments: [
       comment(1, "mallory", "/vouch allow"),
@@ -293,7 +293,7 @@ test("ignored vouches: non-team, edited, unknown command, issues, non-vouch", as
       comment(3, "maint", "/vouch deny"),
       comment(6, "maint", "/vouch toString"),
       comment(4, "maint", "/vouch allow", 9, {
-        html_url: "https://github.com/org/proj/issues/9#issuecomment-4",
+        html_url: "https://github.com/bytecodealliance/proj/issues/9#issuecomment-4",
       }),
       comment(5, "maint", "lgtm, /vouch allow"),
     ],
@@ -311,16 +311,16 @@ test("/vouch revoke: removes the author and the sweep closes their PR", async ()
   const { writes, listText, output } = await runAction({
     pages: [["newbie"]],
     list: "alice\nnewbie  # was vouched\n",
-    vouchTeam: "org/maintainers",
+    vouchTeam: "bytecodealliance/maintainers",
     team: ["maint"],
     comments: [comment(1, "maint", "/vouch revoke")],
     pulls: { 7: { ...closedPr, number: 1, state: "open", closed_at: null } },
   });
   assert.equal(listText, "alice\n");
-  assert.deepEqual(writes[0].slice(0, 3), ["PUT", "/repos/org/gov/contents/approved.txt", "Bearer list-tok"]);
+  assert.deepEqual(writes[0].slice(0, 3), ["PUT", "/repos/bytecodealliance/gov/contents/approved.txt", "Bearer list-tok"]);
   assert.equal(
     writes[0][3].message,
-    "revoke newbie by maint\n\nVia: https://github.com/org/proj/pull/7#issuecomment-1",
+    "revoke newbie by maint\n\nVia: https://github.com/bytecodealliance/proj/pull/7#issuecomment-1",
   );
   assert.deepEqual(writes[1][3], { body: "Sorry @newbie" });
   assert.equal(output, "closed=[1]\n");
@@ -329,7 +329,7 @@ test("/vouch revoke: removes the author and the sweep closes their PR", async ()
 test("/vouch revoke for an unlisted author: no commit", async () => {
   const { writes } = await runAction({
     list: "alice\n",
-    vouchTeam: "org/maintainers",
+    vouchTeam: "bytecodealliance/maintainers",
     team: ["maint"],
     comments: [comment(1, "maint", "/vouch revoke")],
     pulls: { 7: closedPr },
@@ -340,7 +340,7 @@ test("/vouch revoke for an unlisted author: no commit", async () => {
 test("latest vouch wins: allow then revoke leaves the author off and closed", async () => {
   const { writes } = await runAction({
     list: "alice\n",
-    vouchTeam: "org/maintainers",
+    vouchTeam: "bytecodealliance/maintainers",
     team: ["maint"],
     // Returned out of order to check sorting.
     comments: [timed(2, "maint", "/vouch revoke", 6), timed(1, "maint", "/vouch allow", 5)],
@@ -352,28 +352,28 @@ test("latest vouch wins: allow then revoke leaves the author off and closed", as
 test("latest vouch wins: revoke then allow (on another PR) re-adds", async () => {
   const { writes, listText } = await runAction({
     list: "alice\nnewbie\n",
-    vouchTeam: "org/maintainers",
+    vouchTeam: "bytecodealliance/maintainers",
     team: ["maint"],
     comments: [timed(1, "maint", "/vouch revoke", 5, 7), timed(2, "maint", "/vouch allow", 6, 8)],
     pulls: { 7: closedPr, 8: { ...closedPr, number: 8 } },
   });
   // Already listed, so no commit; only PR 8, vouched for after the revoke, reopens.
   assert.equal(listText, "alice\nnewbie\n");
-  assert.deepEqual(writes.map(([m, u]) => [m, u]), [["PATCH", "/repos/org/proj/pulls/8"]]);
+  assert.deepEqual(writes.map(([m, u]) => [m, u]), [["PATCH", "/repos/bytecodealliance/proj/pulls/8"]]);
 });
 
 test("allow on two PRs by the same author: one commit, both reopened", async () => {
   const { writes } = await runAction({
     list: "alice\n",
-    vouchTeam: "org/maintainers",
+    vouchTeam: "bytecodealliance/maintainers",
     team: ["maint"],
     comments: [timed(1, "maint", "/vouch allow", 5, 7), timed(2, "maint", "/vouch allow", 6, 8)],
     pulls: { 7: closedPr, 8: { ...closedPr, number: 8 } },
   });
   assert.deepEqual(writes.map(([m, u]) => [m, u]), [
-    ["PUT", "/repos/org/gov/contents/approved.txt"],
-    ["PATCH", "/repos/org/proj/pulls/7"],
-    ["PATCH", "/repos/org/proj/pulls/8"],
+    ["PUT", "/repos/bytecodealliance/gov/contents/approved.txt"],
+    ["PATCH", "/repos/bytecodealliance/proj/pulls/7"],
+    ["PATCH", "/repos/bytecodealliance/proj/pulls/8"],
   ]);
   assert.match(writes[0][3].message, /issuecomment-2$/);
 });
@@ -382,7 +382,7 @@ test("unreadable vouch team: fails without closing", async () => {
   const { code, writes } = await runAction({
     pages: [["mallory"]],
     list: "alice\n",
-    vouchTeam: "org/maintainers",
+    vouchTeam: "bytecodealliance/maintainers",
     team: null,
   });
   assert.equal(code, 1);
@@ -400,12 +400,13 @@ test("blocklist: closes blocked authors with blocked-message, even if allowed", 
     list: "alice\nmallory\n",
     block: "# spam\nmallory\n",
   });
+  console.log('hello hello');
   assert.equal(code, 0);
   assert.deepEqual(writes, [
-    ["POST", "/repos/org/proj/issues/2/comments", "Bearer pr-tok", { body: "Blocked @Mallory" }],
-    ["PATCH", "/repos/org/proj/pulls/2", "Bearer pr-tok", { state: "closed" }],
-    ["POST", "/repos/org/proj/issues/3/comments", "Bearer pr-tok", { body: "Sorry @eve" }],
-    ["PATCH", "/repos/org/proj/pulls/3", "Bearer pr-tok", { state: "closed" }],
+    ["POST", "/repos/bytecodealliance/proj/issues/2/comments", "Bearer pr-tok", { body: "Blocked @Mallory" }],
+    ["PATCH", "/repos/bytecodealliance/proj/pulls/2", "Bearer pr-tok", { state: "closed" }],
+    ["POST", "/repos/bytecodealliance/proj/issues/3/comments", "Bearer pr-tok", { body: "Sorry @eve" }],
+    ["PATCH", "/repos/bytecodealliance/proj/pulls/3", "Bearer pr-tok", { state: "closed" }],
   ]);
   assert.equal(output, "closed=[2,3]\n");
 });
@@ -453,17 +454,17 @@ test("/vouch block: adds to the blocklist, leaves the allowlist, closes the PR",
     pages: [["newbie"]],
     list: "alice\nnewbie\n",
     block: "spammer\n",
-    vouchTeam: "org/maintainers",
+    vouchTeam: "bytecodealliance/maintainers",
     team: ["maint"],
     comments: [comment(1, "maint", "/vouch block")],
     pulls: { 7: { ...closedPr, number: 1, state: "open", closed_at: null } },
   });
   assert.equal(listText, "alice\nnewbie\n");
   assert.equal(blockText, "spammer\nnewbie\n");
-  assert.deepEqual(writes[0].slice(0, 3), ["PUT", "/repos/org/gov/contents/blocked.txt", "Bearer list-tok"]);
+  assert.deepEqual(writes[0].slice(0, 3), ["PUT", "/repos/bytecodealliance/gov/contents/blocked.txt", "Bearer list-tok"]);
   assert.equal(
     writes[0][3].message,
-    "block newbie by maint\n\nVia: https://github.com/org/proj/pull/7#issuecomment-1",
+    "block newbie by maint\n\nVia: https://github.com/bytecodealliance/proj/pull/7#issuecomment-1",
   );
   assert.deepEqual(writes[1][3], { body: "Blocked @newbie" });
   assert.equal(output, "closed=[1]\n");
@@ -473,7 +474,7 @@ test("/vouch block for an already-blocked author: no commit", async () => {
   const { writes } = await runAction({
     list: "alice\n",
     block: "newbie\n",
-    vouchTeam: "org/maintainers",
+    vouchTeam: "bytecodealliance/maintainers",
     team: ["maint"],
     comments: [comment(1, "maint", "/vouch block")],
     pulls: { 7: closedPr },
@@ -484,7 +485,7 @@ test("/vouch block for an already-blocked author: no commit", async () => {
 test("/vouch block without blocklist-path is ignored", async () => {
   const { writes, listText } = await runAction({
     list: "alice\nnewbie\n",
-    vouchTeam: "org/maintainers",
+    vouchTeam: "bytecodealliance/maintainers",
     team: ["maint"],
     comments: [comment(1, "maint", "/vouch block")],
     pulls: { 7: closedPr },
@@ -497,21 +498,21 @@ test("blocked authors: later allow is ignored and the PR is not reopened", async
   const { writes, listText, blockText } = await runAction({
     list: "alice\n",
     block: "",
-    vouchTeam: "org/maintainers",
+    vouchTeam: "bytecodealliance/maintainers",
     team: ["maint"],
     comments: [timed(1, "maint", "/vouch block", 5), timed(2, "maint", "/vouch allow", 6)],
     pulls: { 7: closedPr },
   });
   assert.equal(blockText, "newbie\n");
   assert.equal(listText, "alice\n");
-  assert.deepEqual(writes.map(([m, u]) => [m, u]), [["PUT", "/repos/org/gov/contents/blocked.txt"]]);
+  assert.deepEqual(writes.map(([m, u]) => [m, u]), [["PUT", "/repos/bytecodealliance/gov/contents/blocked.txt"]]);
 });
 
 test("manually blocked authors: allow is ignored", async () => {
   const { writes } = await runAction({
     list: "alice\n",
     block: "newbie\n",
-    vouchTeam: "org/maintainers",
+    vouchTeam: "bytecodealliance/maintainers",
     team: ["maint"],
     comments: [comment(1, "maint", "/vouch allow")],
     pulls: { 7: closedPr },

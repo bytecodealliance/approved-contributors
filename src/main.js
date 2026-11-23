@@ -270,6 +270,16 @@ async function run() {
     blockPath: input("blocklist-path"),
     vouchTeam: input("vouch-team"),
   };
+
+  const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/');
+  if (owner != "bytecodealliance") {
+    // If the owner of this repository is not the `bytecodealliance` github
+    // organization, we are probably running from within the context of a
+    // contributor's fork. In that case, we do not wish to run this action,
+    // and should return now.
+    return;
+  }
+
   if (ctx.blockPath) ctx.blockedMessage = input("blocked-message", { required: true });
   parsePair(ctx.permsRepo, "permissions-repo");
 

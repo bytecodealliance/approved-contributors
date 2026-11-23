@@ -109,7 +109,11 @@ async function runAction({
     INPUT_TOKEN: "pr-tok",
   };
   const code = await new Promise((resolve) => {
-    execFile(process.execPath, [MAIN], { env }, (err) => resolve(err ? err.code : 0));
+    execFile(process.execPath, [MAIN], { env }, (err, stdout, stderr) => {
+      console.log(stdout);
+      console.error(stderr);
+      resolve(err ? err.code : 0)
+    });
   });
   server.close();
   const writes = requests
